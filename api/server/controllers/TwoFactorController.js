@@ -21,7 +21,7 @@ const enable2FA = async (req, res) => {
     const userId = req.user.id;
     const existingUser = await getUserById(
       userId,
-      '+totpSecret +backupCodes _id twoFactorEnabled email',
+      '+totpSecret +backupCodes',
     );
 
     if (existingUser && existingUser.twoFactorEnabled) {
@@ -65,7 +65,7 @@ const verify2FA = async (req, res) => {
   try {
     const userId = req.user.id;
     const { token, backupCode } = req.body;
-    const user = await getUserById(userId, '+totpSecret +pendingTotpSecret +backupCodes _id');
+    const user = await getUserById(userId, '+totpSecret +pendingTotpSecret +backupCodes');
     const secretSource = user?.pendingTotpSecret ?? user?.totpSecret;
 
     if (!user || !secretSource) {
@@ -100,7 +100,7 @@ const confirm2FA = async (req, res) => {
     const { token } = req.body;
     const user = await getUserById(
       userId,
-      '+totpSecret +pendingTotpSecret +pendingBackupCodes _id',
+      '+totpSecret +pendingTotpSecret +pendingBackupCodes',
     );
     const secretSource = user?.pendingTotpSecret ?? user?.totpSecret;
 
@@ -137,7 +137,7 @@ const disable2FA = async (req, res) => {
   try {
     const userId = req.user.id;
     const { token, backupCode } = req.body;
-    const user = await getUserById(userId, '+totpSecret +backupCodes _id twoFactorEnabled');
+    const user = await getUserById(userId, '+totpSecret +backupCodes');
 
     if (!user || !user.totpSecret) {
       return res.status(400).json({ message: '2FA is not setup for this user' });
@@ -172,7 +172,7 @@ const disable2FA = async (req, res) => {
 const regenerateBackupCodes = async (req, res) => {
   try {
     const userId = req.user.id;
-    const user = await getUserById(userId, '+totpSecret +backupCodes _id twoFactorEnabled');
+    const user = await getUserById(userId, '+totpSecret +backupCodes');
 
     if (!user) {
       return res.status(404).json({ message: 'User not found' });
