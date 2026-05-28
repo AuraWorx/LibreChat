@@ -1,0 +1,31 @@
+# Source of truth for every upstream file AuraWorx is permitted to modify.
+# Adding to this list requires a separate PR with justification.
+# All NEW logic goes in aura/ subdirectories, never in upstream-owned files.
+
+upstream_tag: v0.8.5
+
+allowed_modifications:
+  - path: api/server/controllers/TwoFactorController.js
+    reason: |
+      DocumentDB 5.0 rejects the mixed inclusion/exclusion Mongoose projection
+      emitted by upstream verify2FA/confirm2FA. Replaces with pure-inclusion.
+      Upstream PR candidate.
+      Tracks: AuraWorx/librechat-suite#259
+
+  - path: packages/data-provider/src/bedrock.ts
+    reason: |
+      bedrockInputParser forwards topK as camelCase to Bedrock. Bedrock only
+      accepts snake_case top_k AND rejects top_k entirely when Claude 4
+      adaptive thinking is active. Source-level fix replaces upstream's
+      runtime-fragile string-replace patch on the minified dist bundle.
+      Upstream PR candidate.
+      Tracks: AuraWorx/librechat-suite#269
+
+aura_directories:
+  # Placeholders for future AuraWorx feature work (Steps 2-6 of the fork plan).
+  # Empty at v0.8.5-aura.1; populated by subsequent feature PRs.
+  - api/server/controllers/aura/
+  - api/server/routes/aura/
+  - api/models/aura/
+  - client/src/components/aura/
+  - client/src/hooks/aura/
