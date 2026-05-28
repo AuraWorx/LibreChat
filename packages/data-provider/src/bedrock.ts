@@ -288,9 +288,8 @@ export const bedrockInputParser = s.tConversationSchema
 
     Object.entries(typedData).forEach(([key, value]) => {
       if (!knownKeys.includes(key)) {
-        if (key === 'topK') {
-          additionalFields['top_k'] = value;
-        } else {
+        // Bedrock rejects camelCase 'topK'; Claude 4 adaptive thinking also rejects 'top_k'.
+        if (key !== 'topK') {
           additionalFields[key] = value;
         }
         delete typedData[key];
