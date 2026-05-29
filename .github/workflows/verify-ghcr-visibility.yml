@@ -1,0 +1,93 @@
+name: Verify GHCR visibility
+
+# Phase B guardrail #8 — runs after a successful image publish.
+# Probes ghcr.io anonymously. If the registry returns 401, the package
+# is still private and downstream LibreChat deploys will fail to pull.
+# Opens or updates a sticky issue so a human can flip visibility.
+
+on:
+  workflow_run:
+    workflows: ["Build and push image"]
+    types: [completed]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  probe:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve tag from triggering run
+        id: tag
+        run: |
+          TAG="${{ github.event.workflow_run.head_branch }}"
+          if [[ -z "$TAG" ]]; then
+            echo "::error::No tag on triggering workflow_run event"
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Probe ghcr.io anonymously
+        id: probe
+        run: |
+          OWNER=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')
+          URL="https://ghcr.io/v2/${OWNER}/librechat/manifests/${{ steps.tag.outputs.tag }}"
+          echo "URL: $URL"
+          HTTP_CODE=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -H "Accept: application/vnd.oci.image.index.v1+json" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            "$URL")
+          echo "HTTP code: $HTTP_CODE"
+          echo "code=$HTTP_CODE" >> "$GITHUB_OUTPUT"
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Open or update sticky issue if not public
+        if: ${{ steps.probe.outputs.code == '401' || steps.probe.outputs.code == '403' }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v8.0.0
+        with:
+          script: |
+            const tag = '${{ steps.tag.outputs.tag }}';
+            const code = '${{ steps.probe.outputs.code }}';
+            const url = '${{ steps.probe.outputs.url }}';
+            const label = 'ghcr-visibility';
+            const title = 'GHCR visibility: package not anonymously pullable';
+
+            const { data: existing } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: [label],
+            });
+
+            const body = [
+              `Probe of \`${url}\` returned HTTP \`${code}\` after a successful build.`,
+              `Anonymous pulls are failing, which means downstream LibreChat deploys cannot pull the image.`,
+              ``,
+              `**Fix:** go to https://github.com/orgs/${context.repo.owner}/packages/container/librechat/settings → Change package visibility → Public.`,
+              ``,
+              `If you intentionally want the image private, close this issue and re-trigger the workflow only after wiring an authenticated pull token into all consumers.`,
+              ``,
+              `_Auto-managed by \`.github/workflows/verify-ghcr-visibility.yml\`._`,
+            ].join('\n');
+
+            if (existing.length > 0) {
+              const issue = existing[0];
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `Still failing for tag \`${tag}\` at ${new Date().toISOString()} (HTTP \`${code}\`).`,
+              });
+              core.info(`Updated existing issue #${issue.number}`);
+            } else {
+              const { data: created } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+                labels: [label],
+              });
+              core.info(`Opened new issue #${created.number}`);
+            }
