@@ -78,7 +78,7 @@ jobs:
           );
           const allowed = (boundary.allowed_modifications || []).map(e => e.path);
 
-          let warned = false;
+          const violations = [];
           for (const file of allowed) {
             try {
               const diff = execSync(
@@ -87,10 +87,16 @@ jobs:
               );
               const additions = (diff.match(/^\+[^+]/gm) || []).length;
               if (additions > 10) {
-                console.warn(`WARN: ${file} has ${additions} added lines — entry-point files should have <=10. Consider extracting logic to aura/.`);
-                warned = true;
+                violations.push({ file, additions });
               }
             } catch {}
           }
-          if (!warned) console.log('All entry-point modifications are minimal.');
+          if (violations.length > 0) {
+            console.error('\nEntry-point line limit violated (limit: 10 added lines per file):\n');
+            violations.forEach(v => console.error(`  ${v.file} added ${v.additions} lines`));
+            console.error('\nFix: extract logic to an aura/ subdirectory and keep entry-point edits minimal.');
+            console.error('Override: justify in PR description and split the change.');
+            process.exit(1);
+          }
+          console.log('All entry-point modifications are within the 10-line limit.');
           EOF
