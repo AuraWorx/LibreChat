@@ -22,6 +22,11 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
+      - name: Warn on first-tag-of-baseline
+        if: github.event_name == 'push' && endsWith(github.ref_name, '-aura.1')
+        run: |
+          echo "::warning title=First-tag-of-baseline::Tag ${{ github.ref_name }} is the first AuraWorx patch on this upstream baseline. If the GHCR package didn't exist before this tag, the push may not auto-publish — dispatch this workflow manually via the Actions UI if no image appears within ~5 min."
+
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
