@@ -22,12 +22,26 @@ The machine-readable source of truth for the boundary contract is
 - **Upstream PR:** Not yet filed (planned post exit-gate)
 - **Conflict risk on upstream sync:** Medium (bedrock parsers see active upstream development)
 
+### `api/server/routes/index.js`
+
+- **Reason:** Entry-point export for AuraWorx routers (`bedrockKeys`, `bedrockProxy`) — Bedrock API Keys feature (AuraWorx/librechat-suite#276)
+- **Mechanism:** Two require lines + two export entries only; no logic
+- **Conflict risk on upstream sync:** Low (upstream rarely adds new routers here)
+
+### `api/server/index.js`
+
+- **Reason:** Mounts `/api/bedrock-keys` and `/bedrock` routers — Bedrock API Keys feature (AuraWorx/librechat-suite#276)
+- **Mechanism:** Two `app.use()` lines only
+- **Conflict risk on upstream sync:** Medium (upstream occasionally adds new mounts here)
+
 ## AuraWorx-only directories
 
-All listed under `aura/` subdirectories within upstream paths. **Empty at `v0.8.5-aura.1`** — populated by subsequent feature PRs (Steps 2-6 of the fork plan).
+All listed under `aura/` subdirectories within upstream paths.
 
 - `api/server/controllers/aura/`
 - `api/server/routes/aura/`
+- `api/server/middleware/aura/`   ← added for Bedrock API Keys (Steps 2-3, #276)
+- `api/server/services/aura/`     ← added for Bedrock API Keys (Steps 2-3, #276)
 - `api/models/aura/`
 - `client/src/components/aura/`
 - `client/src/hooks/aura/`
