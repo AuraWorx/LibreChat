@@ -38,4 +38,19 @@ function keyRejected({ reason, lastFour, requestId }) {
   emit('key.rejected', { actor: null, key: { lastFour }, requestId, reason });
 }
 
-module.exports = { keyCreated, keyDeleted, keyRejected };
+function proxyRequest({ userId, keyId, model, requestTokens, responseTokens, durationMs, statusCode }) {
+  const entry = {
+    ts: new Date().toISOString(),
+    event: 'bedrock_proxy_request',
+    userId,
+    keyId,
+    model,
+    requestTokens: requestTokens ?? -1,
+    responseTokens: responseTokens ?? -1,
+    durationMs,
+    statusCode,
+  };
+  process.stdout.write(JSON.stringify(entry) + '\n');
+}
+
+module.exports = { keyCreated, keyDeleted, keyRejected, proxyRequest };
