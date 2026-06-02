@@ -22,6 +22,7 @@ import {
   Balance,
   Account,
 } from './SettingsTabs';
+import ApiKeysTab from '~/components/aura/ApiKeys';
 import usePersonalizationAccess from '~/hooks/usePersonalizationAccess';
 import { useLocalize, TranslationKeys } from '~/hooks';
 import { useGetStartupConfig } from '~/data-provider';
@@ -120,6 +121,11 @@ export default function Settings({ open, onOpenChange }: TDialogProps) {
       value: SettingsTabValues.ACCOUNT,
       icon: <UserIcon />,
       label: 'com_nav_setting_account',
+    },
+    {
+      value: SettingsTabValues.API_KEYS,
+      icon: <span className="icon-sm">🔑</span>,
+      label: 'com_nav_setting_api_keys' as TranslationKeys,
     },
   ];
 
@@ -250,6 +256,9 @@ export default function Settings({ open, onOpenChange }: TDialogProps) {
                     )}
                     <Tabs.Content value={SettingsTabValues.ACCOUNT} tabIndex={-1}>
                       <Account />
+                    </Tabs.Content>
+                    <Tabs.Content value={SettingsTabValues.API_KEYS} tabIndex={-1}>
+                      <ApiKeysTab />
                     </Tabs.Content>
                   </div>
                 </Tabs.Root>
