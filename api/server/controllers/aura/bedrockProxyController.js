@@ -58,6 +58,7 @@ async function handleMessages(req, res) {
       res.status(200).json(parsed);
     }
   } catch (err) {
+    console.error('[bedrock_proxy_error]', err.name, err.message);
     statusCode = mapError(err, res);
   } finally {
     auditLogger.proxyRequest({
