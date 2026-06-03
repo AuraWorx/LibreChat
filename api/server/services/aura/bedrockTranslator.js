@@ -2,7 +2,7 @@
 
 const DROPPED_FIELDS = new Set([
   'metadata', 'cache_control', 'service_tier', 'output_config', 'container', 'inference_geo', 'model',
-  'thinking',
+  'thinking', 'stream',
 ]);
 
 function translateModelId(modelId) {

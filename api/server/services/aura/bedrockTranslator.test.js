@@ -76,10 +76,10 @@ describe('translateRequestBody', () => {
     expect(body.stop_sequences).toEqual(['END']);
   });
 
-  it('passes stream through unchanged', () => {
+  it('drops stream (controller branches on it before translating; Bedrock InvokeModel body has no stream field)', () => {
     const input = { ...baseBody, stream: true };
     const { body } = translateRequestBody(input);
-    expect(body.stream).toBe(true);
+    expect(body.stream).toBeUndefined();
   });
 
   it('passes tools through unchanged', () => {
