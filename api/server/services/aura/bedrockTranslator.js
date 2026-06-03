@@ -6,7 +6,10 @@ const DROPPED_FIELDS = new Set([
 
 function translateModelId(modelId) {
   if (!modelId) throw new Error('model is required');
-  if (modelId.startsWith('anthropic.')) return modelId;
+  // Pass through fully-qualified Bedrock model IDs and cross-region inference profiles unchanged
+  if (modelId.startsWith('anthropic.') || modelId.startsWith('us.') || modelId.startsWith('global.') || modelId.startsWith('eu.') || modelId.startsWith('ap.')) {
+    return modelId;
+  }
   return `anthropic.${modelId}`;
 }
 
