@@ -35,4 +35,22 @@ schema.statics.softDelete = function (id, userId) {
   return this.updateOne({ _id: id, userId }, { $set: { active: false } });
 };
 
+// Debounce window for lastUsedAt writes. Under burst (100 users x 60 RPM = 6000
+// writes/min) an unconditional write per request would create DocumentDB write
+// contention on this collection. We only persist a new lastUsedAt if the key has
+// never been used or its last write is older than this window. The write is
+// fire-and-forget from the auth middleware so it never adds latency to the proxy.
+const LAST_USED_DEBOUNCE_MS = 60 * 1000;
+
+schema.statics.touchLastUsed = function (id, currentLastUsedAt) {
+  if (
+    currentLastUsedAt &&
+    Date.now() - new Date(currentLastUsedAt).getTime() < LAST_USED_DEBOUNCE_MS
+  ) {
+    return Promise.resolve({ acknowledged: true, modifiedCount: 0, debounced: true });
+  }
+  return this.updateOne({ _id: id }, { $set: { lastUsedAt: new Date() } });
+};
+
 module.exports = mongoose.model('BedrockApiKey', schema);
+module.exports.LAST_USED_DEBOUNCE_MS = LAST_USED_DEBOUNCE_MS;

@@ -90,6 +90,37 @@ describe('BedrockApiKey.findByHash', () => {
   });
 });
 
+describe('BedrockApiKey.touchLastUsed', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('writes lastUsedAt when key has never been used', async () => {
+    const id = new mongoose.Types.ObjectId();
+    const spy = jest.spyOn(BedrockApiKey, 'updateOne').mockResolvedValue({ modifiedCount: 1 });
+    await BedrockApiKey.touchLastUsed(id, null);
+    expect(spy).toHaveBeenCalledTimes(1);
+    const [filter, update] = spy.mock.calls[0];
+    expect(filter).toEqual({ _id: id });
+    expect(update.$set.lastUsedAt).toBeInstanceOf(Date);
+  });
+
+  it('writes lastUsedAt when last use is older than the debounce window', async () => {
+    const id = new mongoose.Types.ObjectId();
+    const spy = jest.spyOn(BedrockApiKey, 'updateOne').mockResolvedValue({ modifiedCount: 1 });
+    const stale = new Date(Date.now() - (BedrockApiKey.LAST_USED_DEBOUNCE_MS + 1000));
+    await BedrockApiKey.touchLastUsed(id, stale);
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips the write (debounced) when last use is within the window', async () => {
+    const id = new mongoose.Types.ObjectId();
+    const spy = jest.spyOn(BedrockApiKey, 'updateOne').mockResolvedValue({ modifiedCount: 1 });
+    const recent = new Date(Date.now() - 1000);
+    const result = await BedrockApiKey.touchLastUsed(id, recent);
+    expect(spy).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ debounced: true, modifiedCount: 0 });
+  });
+});
+
 describe('BedrockApiKey.softDelete', () => {
   afterEach(() => jest.restoreAllMocks());
 

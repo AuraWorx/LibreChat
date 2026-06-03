@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const mongoose = require('mongoose');
 const BedrockApiKey = require('../../../models/aura/BedrockApiKey');
+const auditLogger = require('../../services/aura/auditLogger');
 
 function extractToken(req) {
   const auth = req.headers['authorization'];
@@ -30,14 +31,26 @@ async function validateBedrockKey(rawToken) {
 async function bedrockProxyAuth(req, res, next) {
   const token = extractToken(req);
   if (!token) {
+    auditLogger.keyRejected({ reason: 'missing_token', lastFour: null, requestId: req.requestId ?? null });
     return res.status(401).json({ error: 'unauthorized', message: 'Missing API key' });
   }
   try {
     const keyDoc = await validateBedrockKey(token);
     if (!keyDoc) {
+      // Surface invalid/revoked-key attempts to the audit stream so brute-force
+      // probing and graduated-user tools hammering dead keys are observable.
+      // lastFour is derived from the presented token, not from any DB record.
+      auditLogger.keyRejected({
+        reason: 'invalid_or_revoked',
+        lastFour: token.length >= 4 ? token.slice(-4) : null,
+        requestId: req.requestId ?? null,
+      });
       return res.status(401).json({ error: 'unauthorized', message: 'Invalid or revoked API key' });
     }
     req.bedrockKeyDoc = keyDoc;
+    // Fire-and-forget, debounced lastUsedAt update. Never block the proxy call on
+    // this write, and never let its failure reject the request.
+    BedrockApiKey.touchLastUsed(keyDoc._id, keyDoc.lastUsedAt).catch(() => {});
     return next();
   } catch (err) {
     if (err.statusCode === 503) {

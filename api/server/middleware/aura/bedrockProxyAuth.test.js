@@ -1,10 +1,17 @@
 'use strict';
 
 jest.mock('../../../models/aura/BedrockApiKey');
+jest.mock('../../services/aura/auditLogger', () => ({
+  keyRejected: jest.fn(),
+  proxyRequest: jest.fn(),
+  keyCreated: jest.fn(),
+  keyDeleted: jest.fn(),
+}));
 
 const mongoose = require('mongoose');
 const BedrockApiKey = require('../../../models/aura/BedrockApiKey');
-const { extractToken, validateBedrockKey } = require('./bedrockProxyAuth');
+const auditLogger = require('../../services/aura/auditLogger');
+const { extractToken, validateBedrockKey, bedrockProxyAuth } = require('./bedrockProxyAuth');
 const crypto = require('crypto');
 
 beforeAll(() => {
@@ -66,6 +73,82 @@ describe('validateBedrockKey', () => {
     const original = mongoose.connection.readyState;
     Object.defineProperty(mongoose.connection, 'readyState', { value: 0, writable: true, configurable: true });
     await expect(validateBedrockKey('sometoken')).rejects.toMatchObject({ statusCode: 503 });
+    Object.defineProperty(mongoose.connection, 'readyState', { value: original, writable: true, configurable: true });
+  });
+});
+
+describe('bedrockProxyAuth middleware', () => {
+  function mockRes() {
+    return {
+      statusCode: null,
+      body: null,
+      headers: {},
+      status(code) { this.statusCode = code; return this; },
+      json(payload) { this.body = payload; return this; },
+      set(k, v) { this.headers[k] = v; return this; },
+    };
+  }
+
+  it('emits keyRejected with reason missing_token and passes no lastFour when no auth header', async () => {
+    const req = { headers: {}, requestId: 'req-1' };
+    const res = mockRes();
+    const next = jest.fn();
+    await bedrockProxyAuth(req, res, next);
+    expect(res.statusCode).toBe(401);
+    expect(next).not.toHaveBeenCalled();
+    expect(auditLogger.keyRejected).toHaveBeenCalledWith({
+      reason: 'missing_token', lastFour: null, requestId: 'req-1',
+    });
+  });
+
+  it('emits keyRejected with invalid_or_revoked + token lastFour when key not found', async () => {
+    BedrockApiKey.findByHash.mockResolvedValue(null);
+    const req = { headers: { authorization: 'Bearer abcdefghijklmnop' }, requestId: 'req-2' };
+    const res = mockRes();
+    const next = jest.fn();
+    await bedrockProxyAuth(req, res, next);
+    expect(res.statusCode).toBe(401);
+    expect(next).not.toHaveBeenCalled();
+    expect(auditLogger.keyRejected).toHaveBeenCalledWith({
+      reason: 'invalid_or_revoked', lastFour: 'mnop', requestId: 'req-2',
+    });
+  });
+
+  it('on valid key: calls next, sets req.bedrockKeyDoc, fires touchLastUsed, no rejection', async () => {
+    const keyDoc = { _id: 'kid', userId: 'uid', lastUsedAt: null };
+    BedrockApiKey.findByHash.mockResolvedValue(keyDoc);
+    BedrockApiKey.touchLastUsed.mockResolvedValue({ modifiedCount: 1 });
+    const req = { headers: { authorization: 'Bearer goodtoken1234' }, requestId: 'req-3' };
+    const res = mockRes();
+    const next = jest.fn();
+    await bedrockProxyAuth(req, res, next);
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(req.bedrockKeyDoc).toBe(keyDoc);
+    expect(BedrockApiKey.touchLastUsed).toHaveBeenCalledWith('kid', null);
+    expect(auditLogger.keyRejected).not.toHaveBeenCalled();
+  });
+
+  it('does not reject the request if touchLastUsed write fails', async () => {
+    const keyDoc = { _id: 'kid', userId: 'uid', lastUsedAt: null };
+    BedrockApiKey.findByHash.mockResolvedValue(keyDoc);
+    BedrockApiKey.touchLastUsed.mockRejectedValue(new Error('docdb down'));
+    const req = { headers: { authorization: 'Bearer goodtoken1234' }, requestId: 'req-4' };
+    const res = mockRes();
+    const next = jest.fn();
+    await bedrockProxyAuth(req, res, next);
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns 503 with Retry-After when mongoose not connected', async () => {
+    const original = mongoose.connection.readyState;
+    Object.defineProperty(mongoose.connection, 'readyState', { value: 0, writable: true, configurable: true });
+    const req = { headers: { authorization: 'Bearer goodtoken1234' }, requestId: 'req-5' };
+    const res = mockRes();
+    const next = jest.fn();
+    await bedrockProxyAuth(req, res, next);
+    expect(res.statusCode).toBe(503);
+    expect(res.headers['Retry-After']).toBe('5');
+    expect(next).not.toHaveBeenCalled();
     Object.defineProperty(mongoose.connection, 'readyState', { value: original, writable: true, configurable: true });
   });
 });
