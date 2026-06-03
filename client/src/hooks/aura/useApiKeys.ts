@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useAuthContext } from '~/hooks/AuthContext';
 
 export interface ApiKey {
   _id: string;
@@ -20,15 +21,24 @@ export interface CreateKeyResult {
 }
 
 export function useApiKeys() {
+  const { token } = useAuthContext();
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const authHeaders = useCallback(
+    (extra?: Record<string, string>) => ({
+      Authorization: `Bearer ${token}`,
+      ...extra,
+    }),
+    [token],
+  );
 
   const fetchKeys = useCallback(async () => {
     setIsLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/bedrock-keys', { credentials: 'include' });
+      const res = await fetch('/api/bedrock-keys', { headers: authHeaders() });
       if (res.ok) {
         const data = await res.json();
         setKeys(data.keys ?? []);
@@ -40,7 +50,7 @@ export function useApiKeys() {
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [authHeaders]);
 
   useEffect(() => {
     fetchKeys();
@@ -50,8 +60,7 @@ export function useApiKeys() {
     try {
       const res = await fetch('/api/bedrock-keys', {
         method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ name }),
       });
       if (res.status === 409) {
@@ -67,15 +76,15 @@ export function useApiKeys() {
     } catch {
       return { error: 'network_error' };
     }
-  }, []);
+  }, [authHeaders]);
 
   const deleteKey = useCallback(async (id: string): Promise<void> => {
-    const snapshot = keys; // synchronous capture before the async boundary
+    const snapshot = keys;
     setKeys((prev) => prev.filter((k) => k._id !== id));
     try {
       const res = await fetch(`/api/bedrock-keys/${id}`, {
         method: 'DELETE',
-        credentials: 'include',
+        headers: authHeaders(),
       });
       if (!res.ok) {
         setKeys(snapshot);
@@ -83,7 +92,7 @@ export function useApiKeys() {
     } catch {
       setKeys(snapshot);
     }
-  }, [keys]);
+  }, [authHeaders, keys]);
 
   return { keys, isLoading, error, fetchKeys, createKey, deleteKey };
 }
