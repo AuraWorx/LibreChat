@@ -53,7 +53,7 @@ export default function CreateKeyForm({ createKey, onKeyCreated }: CreateKeyForm
           onChange={(e) => setName(e.target.value)}
           placeholder="Key name (e.g. claude-code-laptop)"
           maxLength={101}
-          className="flex-1"
+          className="flex-1 text-text-primary"
         />
         <Button
           type="submit"
