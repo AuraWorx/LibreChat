@@ -80,7 +80,7 @@ export default function ApiKeysTab() {
             <DeleteKeyModal
               keyName={deletingKey.name}
               lastFour={deletingKey.lastFour}
-              keyId={deletingKey._id}
+              keyId={deletingKey.id}
               isDeleting={isDeleting}
               onConfirm={handleDeleteConfirm}
               onCancel={() => setDeletingKey(null)}

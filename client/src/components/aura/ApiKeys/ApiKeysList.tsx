@@ -26,7 +26,7 @@ export default function ApiKeysList({ keys, onDeleteClick }: ApiKeysListProps) {
     <ul className="flex flex-col gap-2">
       {keys.map((key) => (
         <li
-          key={key._id}
+          key={key.id}
           className={cn(
             'flex items-start justify-between rounded-lg border border-border-light bg-surface-secondary p-3',
           )}

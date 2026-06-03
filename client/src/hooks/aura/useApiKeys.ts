@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useAuthContext } from '~/hooks/AuthContext';
 
 export interface ApiKey {
-  _id: string;
+  id: string;
   name: string;
   lastFour: string;
   createdAt: string;
@@ -13,7 +13,7 @@ export interface ApiKey {
 export interface CreateKeyResult {
   token?: string;
   error?: string;
-  _id?: string;
+  id?: string;
   name?: string;
   lastFour?: string;
   createdAt?: string;
@@ -80,7 +80,7 @@ export function useApiKeys() {
 
   const deleteKey = useCallback(async (id: string): Promise<void> => {
     const snapshot = keys;
-    setKeys((prev) => prev.filter((k) => k._id !== id));
+    setKeys((prev) => prev.filter((k) => k.id !== id));
     try {
       const res = await fetch(`/api/bedrock-keys/${id}`, {
         method: 'DELETE',
