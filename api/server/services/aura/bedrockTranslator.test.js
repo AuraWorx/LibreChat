@@ -76,10 +76,22 @@ describe('translateRequestBody', () => {
     expect(body.stop_sequences).toEqual(['END']);
   });
 
-  it('drops stream (controller branches on it before translating; Bedrock InvokeModel body has no stream field)', () => {
+  it('drops stream — not in Bedrock allowlist', () => {
     const input = { ...baseBody, stream: true };
     const { body } = translateRequestBody(input);
     expect(body.stream).toBeUndefined();
+  });
+
+  it('drops context_management — Claude Code CLI field not accepted by Bedrock', () => {
+    const input = { ...baseBody, context_management: { enabled: true } };
+    const { body } = translateRequestBody(input);
+    expect(body.context_management).toBeUndefined();
+  });
+
+  it('drops thinking — not in Bedrock allowlist', () => {
+    const input = { ...baseBody, thinking: { type: 'adaptive' } };
+    const { body } = translateRequestBody(input);
+    expect(body.thinking).toBeUndefined();
   });
 
   it('passes tools through unchanged', () => {
