@@ -125,9 +125,21 @@ describe('translateRequestBody', () => {
     expect(body.inference_geo).toBeUndefined();
   });
 
-  it('converts anthropic-beta header to anthropic_beta array', () => {
-    const { body } = translateRequestBody(baseBody, 'feat-a,feat-b');
-    expect(body.anthropic_beta).toEqual(['feat-a', 'feat-b']);
+  it('passes known Bedrock betas through', () => {
+    const { body } = translateRequestBody(baseBody, 'interleaved-thinking-2025-05-14,extended-output-2025-06-30');
+    expect(body.anthropic_beta).toEqual(['interleaved-thinking-2025-05-14', 'extended-output-2025-06-30']);
+  });
+
+  it('filters out client-tool betas that Bedrock does not recognise', () => {
+    // Claude Code CLI injects claude-code-2025-03-07 which Bedrock rejects with ValidationException
+    const { body } = translateRequestBody(baseBody, 'claude-code-2025-03-07');
+    expect(body.anthropic_beta).toBeUndefined();
+  });
+
+  it('keeps only Bedrock-valid betas when header contains a mix', () => {
+    const header = 'claude-code-2025-03-07,interleaved-thinking-2025-05-14,unknown-flag';
+    const { body } = translateRequestBody(baseBody, header);
+    expect(body.anthropic_beta).toEqual(['interleaved-thinking-2025-05-14']);
   });
 
   it('omits anthropic_beta when header is absent', () => {

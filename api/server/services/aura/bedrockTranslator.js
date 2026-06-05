@@ -5,6 +5,14 @@ const DROPPED_FIELDS = new Set([
   'thinking', 'stream',
 ]);
 
+// Only beta flags that Bedrock's InvokeModel API recognises.
+// Client tools (Claude Code, Cursor, Cline) inject their own betas (e.g. claude-code-2025-03-07)
+// which Bedrock rejects with ValidationException: invalid beta flag.
+const BEDROCK_VALID_BETAS = new Set([
+  'interleaved-thinking-2025-05-14',
+  'extended-output-2025-06-30',
+]);
+
 function translateModelId(modelId) {
   if (!modelId) throw new Error('model is required');
   // Pass through fully-qualified Bedrock model IDs and cross-region inference profiles unchanged
@@ -26,8 +34,8 @@ function translateRequestBody(anthropicBody, anthropicBetaHeader) {
   }
 
   if (anthropicBetaHeader) {
-    body.anthropic_beta = anthropicBetaHeader.split(',').map((s) => s.trim()).filter(Boolean);
-    if (body.anthropic_beta.length === 0) delete body.anthropic_beta;
+    const filtered = anthropicBetaHeader.split(',').map((s) => s.trim()).filter((b) => BEDROCK_VALID_BETAS.has(b));
+    if (filtered.length > 0) body.anthropic_beta = filtered;
   }
 
   return { modelId, body };
