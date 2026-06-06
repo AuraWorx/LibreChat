@@ -77,8 +77,8 @@ export default function TokenRevealModal({ token, keyName, onClose }: TokenRevea
         <p className="text-sm text-red-600">Copy failed — please copy the token manually.</p>
       )}
       <div className="rounded border border-border-light bg-surface-secondary p-3 font-mono text-xs text-text-secondary">
-        <p>export ANTHROPIC_BASE_URL={baseUrl}</p>
-        <p>export ANTHROPIC_AUTH_TOKEN={token.slice(0, 8)}&hellip;{token.slice(-4)}</p>
+        <p className="select-all">export ANTHROPIC_BASE_URL={baseUrl}</p>
+        <p className="select-all">export ANTHROPIC_AUTH_TOKEN={token}</p>
       </div>
       <div className="flex justify-end">
         <Button onClick={onClose}>I copied it</Button>
