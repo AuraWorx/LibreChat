@@ -77,7 +77,7 @@ async function deleteKey(req, res) {
       return res.status(404).json({ error: 'not_found' });
     }
 
-    await BedrockApiKey.softDelete(id, userId);
+    await BedrockApiKey.deleteOne({ _id: id, userId });
 
     auditLogger.keyDeleted({
       actor: { userId, via: 'settings_ui' },

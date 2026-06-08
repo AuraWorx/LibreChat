@@ -3,6 +3,16 @@
 const mongoose = require('mongoose');
 const crypto = require('crypto');
 
+const limitsSchema = new mongoose.Schema(
+  {
+    maxOutputTokensPerRequest: { type: Number, default: null },
+    dailyInputTokens: { type: Number, default: null },
+    dailyOutputTokens: { type: Number, default: null },
+    dailyCacheWriteTokens: { type: Number, default: null },
+  },
+  { _id: false },
+);
+
 const schema = new mongoose.Schema(
   {
     userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
@@ -10,6 +20,7 @@ const schema = new mongoose.Schema(
     hash: { type: String, required: true },
     lastFour: { type: String, required: true, maxlength: 4 },
     allowedModels: { type: [String], default: null },
+    limits: { type: limitsSchema, default: null },
     active: { type: Boolean, default: true, index: true },
     createdAt: { type: Date, default: Date.now, index: true },
     lastUsedAt: { type: Date, default: null },
@@ -29,10 +40,6 @@ schema.statics.generateToken = function () {
 
 schema.statics.findByHash = function (hash) {
   return this.findOne({ hash, active: true });
-};
-
-schema.statics.softDelete = function (id, userId) {
-  return this.updateOne({ _id: id, userId }, { $set: { active: false } });
 };
 
 // Debounce window for lastUsedAt writes. Under burst (100 users x 60 RPM = 6000

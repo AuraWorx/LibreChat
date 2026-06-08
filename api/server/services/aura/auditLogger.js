@@ -38,7 +38,7 @@ function keyRejected({ reason, lastFour, requestId }) {
   emit('key.rejected', { actor: null, key: { lastFour }, requestId, reason });
 }
 
-function proxyRequest({ userId, keyId, model, requestTokens, responseTokens, durationMs, statusCode }) {
+function proxyRequest({ userId, keyId, model, requestTokens, responseTokens, cacheWriteTokens, cacheReadTokens, durationMs, statusCode }) {
   const entry = {
     ts: new Date().toISOString(),
     event: 'bedrock_proxy_request',
@@ -47,6 +47,8 @@ function proxyRequest({ userId, keyId, model, requestTokens, responseTokens, dur
     model,
     requestTokens: requestTokens ?? -1,
     responseTokens: responseTokens ?? -1,
+    cacheWriteTokens: cacheWriteTokens ?? 0,
+    cacheReadTokens: cacheReadTokens ?? 0,
     durationMs,
     statusCode,
   };
