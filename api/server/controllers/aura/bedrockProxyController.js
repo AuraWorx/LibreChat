@@ -82,44 +82,55 @@ function todayUTC() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Returns null if OK, or { limit_type, limit, used } if fully exhausted.
+// Also returns remainingOutputTokens — the tightest remaining daily output budget
+// across per-key and org limits, so the caller can cap max_tokens accordingly.
 async function checkDailyLimits(userId, limits) {
   const today = todayUTC();
+  let remainingOutputTokens = null; // null = no output limit configured
 
-  // 1. Per-key daily check (key's own limits or key-defaults fallback)
+  // 1. Per-key daily check
   if (limits.dailyInputTokens || limits.dailyOutputTokens || limits.dailyCacheWriteTokens) {
     const usage = await BedrockDailyUsage.findOne({ userId, date: today }).lean();
-    if (usage) {
-      if (limits.dailyInputTokens && usage.inputTokens >= limits.dailyInputTokens) {
-        return { limit_type: 'daily_input_tokens', limit: limits.dailyInputTokens, used: usage.inputTokens };
-      }
-      if (limits.dailyOutputTokens && usage.outputTokens >= limits.dailyOutputTokens) {
-        return { limit_type: 'daily_output_tokens', limit: limits.dailyOutputTokens, used: usage.outputTokens };
-      }
-      if (limits.dailyCacheWriteTokens && usage.cacheWriteTokens >= limits.dailyCacheWriteTokens) {
-        return { limit_type: 'daily_cache_write_tokens', limit: limits.dailyCacheWriteTokens, used: usage.cacheWriteTokens };
-      }
+    const used = usage ?? { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 };
+    if (limits.dailyInputTokens && used.inputTokens >= limits.dailyInputTokens) {
+      return { exhausted: true, limit_type: 'daily_input_tokens', limit: limits.dailyInputTokens, used: used.inputTokens };
+    }
+    if (limits.dailyOutputTokens && used.outputTokens >= limits.dailyOutputTokens) {
+      return { exhausted: true, limit_type: 'daily_output_tokens', limit: limits.dailyOutputTokens, used: used.outputTokens };
+    }
+    if (limits.dailyCacheWriteTokens && used.cacheWriteTokens >= limits.dailyCacheWriteTokens) {
+      return { exhausted: true, limit_type: 'daily_cache_write_tokens', limit: limits.dailyCacheWriteTokens, used: used.cacheWriteTokens };
+    }
+    if (limits.dailyOutputTokens) {
+      remainingOutputTokens = limits.dailyOutputTokens - used.outputTokens;
     }
   }
 
-  // 2. Org aggregate check — total across ALL keys combined
+  // 2. Org aggregate check
   const db = await getDbDefaults();
   const org = db?.orgBudget ?? {};
   if (org.dailyInputTokens || org.dailyOutputTokens || org.dailyCacheWriteTokens) {
     const globalUsage = await BedrockDailyUsage.findOne({ userId: '__global__', date: today }).lean();
-    if (globalUsage) {
-      if (org.dailyInputTokens && globalUsage.inputTokens >= org.dailyInputTokens) {
-        return { limit_type: 'org_daily_input_tokens', limit: org.dailyInputTokens, used: globalUsage.inputTokens };
-      }
-      if (org.dailyOutputTokens && globalUsage.outputTokens >= org.dailyOutputTokens) {
-        return { limit_type: 'org_daily_output_tokens', limit: org.dailyOutputTokens, used: globalUsage.outputTokens };
-      }
-      if (org.dailyCacheWriteTokens && globalUsage.cacheWriteTokens >= org.dailyCacheWriteTokens) {
-        return { limit_type: 'org_daily_cache_write_tokens', limit: org.dailyCacheWriteTokens, used: globalUsage.cacheWriteTokens };
-      }
+    const gused = globalUsage ?? { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0 };
+    if (org.dailyInputTokens && gused.inputTokens >= org.dailyInputTokens) {
+      return { exhausted: true, limit_type: 'org_daily_input_tokens', limit: org.dailyInputTokens, used: gused.inputTokens };
+    }
+    if (org.dailyOutputTokens && gused.outputTokens >= org.dailyOutputTokens) {
+      return { exhausted: true, limit_type: 'org_daily_output_tokens', limit: org.dailyOutputTokens, used: gused.outputTokens };
+    }
+    if (org.dailyCacheWriteTokens && gused.cacheWriteTokens >= org.dailyCacheWriteTokens) {
+      return { exhausted: true, limit_type: 'org_daily_cache_write_tokens', limit: org.dailyCacheWriteTokens, used: gused.cacheWriteTokens };
+    }
+    if (org.dailyOutputTokens) {
+      const orgRemaining = org.dailyOutputTokens - gused.outputTokens;
+      remainingOutputTokens = remainingOutputTokens === null
+        ? orgRemaining
+        : Math.min(remainingOutputTokens, orgRemaining);
     }
   }
 
-  return null;
+  return { exhausted: false, remainingOutputTokens };
 }
 
 function incrementUsage(userId, counters) {
@@ -169,17 +180,20 @@ async function handleMessages(req, res) {
 
     // Daily token limit pre-call check
     const limits = await getEffectiveLimits(bedrockKeyDoc);
-    const exceeded = await checkDailyLimits(userId, limits);
-    if (exceeded) {
+    const dailyCheck = await checkDailyLimits(userId, limits);
+    if (dailyCheck.exhausted) {
+      const { exhausted: _x, remainingOutputTokens: _r, ...errorFields } = dailyCheck;
       return res.status(429).json({
         error: 'daily_token_limit_exceeded',
         message: 'Daily token budget exhausted. Resets at midnight UTC.',
-        ...exceeded,
+        ...errorFields,
       });
     }
 
+    // Cap max_tokens to the tightest of: per-request ceiling and remaining daily output budget
+    const effectiveOutputCap = hardMin(limits.maxOutputTokensPerRequest, dailyCheck.remainingOutputTokens);
     const { modelId, body } = translateRequestBody(anthropicBody, betaHeader, {
-      maxOutputTokensPerRequest: limits.maxOutputTokensPerRequest,
+      maxOutputTokensPerRequest: effectiveOutputCap,
     });
     const bodyBytes = Buffer.from(JSON.stringify(body));
 
