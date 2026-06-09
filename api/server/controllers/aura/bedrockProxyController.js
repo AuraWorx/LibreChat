@@ -72,8 +72,11 @@ async function getDbDefaults() {
     const doc = await BedrockProxyConfig.findById('default').lean();
     _dbDefaultsCache = doc ?? null;
     _dbDefaultsCacheAt = now;
-  } catch {
-    // DB unavailable — keep stale cache or return null
+  } catch (err) {
+    // Fail open: a transient config-read failure must not take the proxy down.
+    // We degrade to env-based limits (which need no DB) and the stale cache if
+    // any, but log loudly so the degradation is observable rather than silent.
+    console.error('[bedrock_config_error]', err.message);
     if (!_dbDefaultsCache) _dbDefaultsCache = null;
   }
   return _dbDefaultsCache;
@@ -357,4 +360,13 @@ async function handleCountTokens(req, res) {
   }
 }
 
-module.exports = { handleMessages, handleCountTokens };
+module.exports = {
+  handleMessages,
+  handleCountTokens,
+  // Exported for unit testing of the spend-control logic.
+  hardMin,
+  getEnvLimit,
+  getEffectiveLimits,
+  checkDailyLimits,
+  incrementUsage,
+};

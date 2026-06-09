@@ -172,4 +172,32 @@ describe('translateRequestBody', () => {
     const { body } = translateRequestBody(baseBody, '');
     expect(body.anthropic_beta).toBeUndefined();
   });
+
+  it('caps max_tokens to maxOutputTokensPerRequest when the request exceeds it', () => {
+    const { body } = translateRequestBody({ ...baseBody, max_tokens: 8000 }, undefined, {
+      maxOutputTokensPerRequest: 4000,
+    });
+    expect(body.max_tokens).toBe(4000);
+  });
+
+  it('sets max_tokens to the cap when the request omits it', () => {
+    const { body } = translateRequestBody(
+      { model: baseBody.model, messages: baseBody.messages },
+      undefined,
+      { maxOutputTokensPerRequest: 4000 },
+    );
+    expect(body.max_tokens).toBe(4000);
+  });
+
+  it('leaves max_tokens untouched when below the cap', () => {
+    const { body } = translateRequestBody({ ...baseBody, max_tokens: 1000 }, undefined, {
+      maxOutputTokensPerRequest: 4000,
+    });
+    expect(body.max_tokens).toBe(1000);
+  });
+
+  it('leaves max_tokens untouched when no cap is supplied', () => {
+    const { body } = translateRequestBody({ ...baseBody, max_tokens: 8000 });
+    expect(body.max_tokens).toBe(8000);
+  });
 });

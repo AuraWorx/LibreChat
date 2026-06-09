@@ -3,6 +3,8 @@
 jest.mock('@aws-sdk/client-bedrock-runtime');
 jest.mock('../../services/aura/bedrockStreamer');
 jest.mock('../../services/aura/auditLogger');
+jest.mock('../../../models/aura/BedrockDailyUsage');
+jest.mock('../../../models/aura/BedrockProxyConfig');
 
 const {
   BedrockRuntimeClient,
@@ -12,6 +14,8 @@ const {
 } = require('@aws-sdk/client-bedrock-runtime');
 const { streamBedrockResponse } = require('../../services/aura/bedrockStreamer');
 const auditLogger = require('../../services/aura/auditLogger');
+const BedrockDailyUsage = require('../../../models/aura/BedrockDailyUsage');
+const BedrockProxyConfig = require('../../../models/aura/BedrockProxyConfig');
 const { handleMessages, handleCountTokens } = require('./bedrockProxyController');
 
 function mockReq(overrides = {}) {
@@ -38,6 +42,15 @@ function mockRes() {
 function makeBedrockClient(sendImpl) {
   BedrockRuntimeClient.mockImplementation(() => ({ send: jest.fn().mockImplementation(sendImpl) }));
 }
+
+beforeEach(() => {
+  // Spend-control reads hit mongoose; with no DB connection in unit tests they
+  // would buffer for 10s and time out. Mock the models so the limit path resolves
+  // instantly as "no limits configured".
+  BedrockProxyConfig.findById.mockReturnValue({ lean: () => Promise.resolve(null) });
+  BedrockDailyUsage.findOne.mockReturnValue({ lean: () => Promise.resolve(null) });
+  BedrockDailyUsage.increment.mockResolvedValue(undefined);
+});
 
 afterEach(() => jest.clearAllMocks());
 

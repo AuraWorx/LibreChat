@@ -52,6 +52,12 @@ describe('createUserRateLimiter', () => {
     expect(key).toBe('127.0.0.1');
   });
 
+  it('normalizes the IPv6 fallback to a /56 subnet to prevent per-address bypass', () => {
+    const limiter = createUserRateLimiter();
+    const req = mockReq({ bedrockKeyDoc: undefined, ip: '2001:db8::1' });
+    expect(limiter.keyGenerator(req)).toBe('2001:db8::/56');
+  });
+
   it('defaults max to 60', () => {
     const limiter = createUserRateLimiter();
     expect(limiter.max ?? 60).toBe(60);
