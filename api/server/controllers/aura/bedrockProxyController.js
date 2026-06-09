@@ -57,14 +57,21 @@ async function getDbDefaults() {
   return _dbDefaultsCache;
 }
 
+// Global default is the hard ceiling — take the minimum across all active limits.
+// Per-key limits can only be more restrictive, never more permissive than global.
+function hardMin(...values) {
+  const active = values.filter((v) => v != null && v > 0);
+  return active.length > 0 ? Math.min(...active) : null;
+}
+
 async function getEffectiveLimits(keyDoc) {
   const k = keyDoc?.limits ?? {};
   const db = await getDbDefaults();
   return {
-    maxOutputTokensPerRequest: k.maxOutputTokensPerRequest ?? db?.maxOutputTokensPerRequest ?? getEnvLimit('BEDROCK_MAX_OUTPUT_TOKENS_PER_REQUEST'),
-    dailyInputTokens:          k.dailyInputTokens          ?? db?.dailyInputTokens          ?? getEnvLimit('BEDROCK_DAILY_INPUT_TOKEN_LIMIT'),
-    dailyOutputTokens:         k.dailyOutputTokens         ?? db?.dailyOutputTokens         ?? getEnvLimit('BEDROCK_DAILY_OUTPUT_TOKEN_LIMIT'),
-    dailyCacheWriteTokens:     k.dailyCacheWriteTokens     ?? db?.dailyCacheWriteTokens     ?? getEnvLimit('BEDROCK_DAILY_CACHE_WRITE_TOKEN_LIMIT'),
+    maxOutputTokensPerRequest: hardMin(k.maxOutputTokensPerRequest, db?.maxOutputTokensPerRequest, getEnvLimit('BEDROCK_MAX_OUTPUT_TOKENS_PER_REQUEST')),
+    dailyInputTokens:          hardMin(k.dailyInputTokens,          db?.dailyInputTokens,          getEnvLimit('BEDROCK_DAILY_INPUT_TOKEN_LIMIT')),
+    dailyOutputTokens:         hardMin(k.dailyOutputTokens,         db?.dailyOutputTokens,         getEnvLimit('BEDROCK_DAILY_OUTPUT_TOKEN_LIMIT')),
+    dailyCacheWriteTokens:     hardMin(k.dailyCacheWriteTokens,     db?.dailyCacheWriteTokens,     getEnvLimit('BEDROCK_DAILY_CACHE_WRITE_TOKEN_LIMIT')),
   };
 }
 
