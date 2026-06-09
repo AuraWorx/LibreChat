@@ -143,15 +143,12 @@ describe('translateRequestBody', () => {
     expect(body.inference_geo).toBeUndefined();
   });
 
-  it('passes known Bedrock betas through', () => {
+  it('passes Bedrock-valid betas through and drops interleaved-thinking', () => {
     const { body } = translateRequestBody(
       baseBody,
       'interleaved-thinking-2025-05-14,extended-output-2025-06-30',
     );
-    expect(body.anthropic_beta).toEqual([
-      'interleaved-thinking-2025-05-14',
-      'extended-output-2025-06-30',
-    ]);
+    expect(body.anthropic_beta).toEqual(['extended-output-2025-06-30']);
   });
 
   it('filters out client-tool betas that Bedrock does not recognise', () => {
@@ -161,9 +158,9 @@ describe('translateRequestBody', () => {
   });
 
   it('keeps only Bedrock-valid betas when header contains a mix', () => {
-    const header = 'claude-code-2025-03-07,interleaved-thinking-2025-05-14,unknown-flag';
+    const header = 'claude-code-2025-03-07,extended-output-2025-06-30,unknown-flag';
     const { body } = translateRequestBody(baseBody, header);
-    expect(body.anthropic_beta).toEqual(['interleaved-thinking-2025-05-14']);
+    expect(body.anthropic_beta).toEqual(['extended-output-2025-06-30']);
   });
 
   it('omits anthropic_beta when header is absent', () => {

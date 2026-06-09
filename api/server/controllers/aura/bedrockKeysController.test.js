@@ -153,9 +153,9 @@ describe('listKeys', () => {
 });
 
 describe('deleteKey', () => {
-  it('returns 204 on successful soft delete', async () => {
+  it('returns 204 on successful delete', async () => {
     BedrockApiKey.findOne.mockResolvedValue({ _id: keyId, name: 'k', lastFour: '1234' });
-    BedrockApiKey.softDelete.mockResolvedValue({ modifiedCount: 1 });
+    BedrockApiKey.deleteOne.mockResolvedValue({ deletedCount: 1 });
     const req = { user: { id: userId }, params: { id: keyId } };
     const res = mockRes();
     await deleteKey(req, res);
@@ -179,7 +179,7 @@ describe('deleteKey', () => {
 
   it('emits key.deleted audit event on success', async () => {
     BedrockApiKey.findOne.mockResolvedValue({ _id: keyId, name: 'k', lastFour: '1234' });
-    BedrockApiKey.softDelete.mockResolvedValue({ modifiedCount: 1 });
+    BedrockApiKey.deleteOne.mockResolvedValue({ deletedCount: 1 });
     const req = { user: { id: userId }, params: { id: keyId }, requestId: 'req_del' };
     const res = mockRes();
     await deleteKey(req, res);

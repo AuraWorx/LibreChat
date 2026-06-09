@@ -135,23 +135,3 @@ describe('BedrockApiKey.touchLastUsed', () => {
     expect(result).toMatchObject({ debounced: true, modifiedCount: 0 });
   });
 });
-
-describe('BedrockApiKey.softDelete', () => {
-  afterEach(() => jest.restoreAllMocks());
-
-  it('calls updateOne with active:false scoped to userId', async () => {
-    const id = new mongoose.Types.ObjectId();
-    const userId = new mongoose.Types.ObjectId();
-    const spy = jest.spyOn(BedrockApiKey, 'updateOne').mockResolvedValue({ modifiedCount: 1 });
-    await BedrockApiKey.softDelete(id, userId);
-    expect(spy).toHaveBeenCalledWith({ _id: id, userId }, { $set: { active: false } });
-  });
-
-  it('returns modifiedCount:0 when key not owned by userId', async () => {
-    const id = new mongoose.Types.ObjectId();
-    const userId = new mongoose.Types.ObjectId();
-    jest.spyOn(BedrockApiKey, 'updateOne').mockResolvedValue({ modifiedCount: 0 });
-    const result = await BedrockApiKey.softDelete(id, userId);
-    expect(result.modifiedCount).toBe(0);
-  });
-});
