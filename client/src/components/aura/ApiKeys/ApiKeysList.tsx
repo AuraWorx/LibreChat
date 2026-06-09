@@ -1,3 +1,4 @@
+/* eslint-disable i18next/no-literal-string */
 import React from 'react';
 import { Trash2 } from 'lucide-react';
 import { Button } from '@librechat/client';

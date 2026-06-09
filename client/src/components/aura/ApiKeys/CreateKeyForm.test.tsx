@@ -4,8 +4,19 @@ import userEvent from '@testing-library/user-event';
 import CreateKeyForm from './CreateKeyForm';
 
 jest.mock('@librechat/client', () => ({
-  Button: ({ children, onClick, disabled, ...props }: React.PropsWithChildren<{ onClick?: () => void; disabled?: boolean; [k: string]: unknown }>) => (
-    <button onClick={onClick} disabled={disabled} {...props}>{children}</button>
+  Button: ({
+    children,
+    onClick,
+    disabled,
+    ...props
+  }: React.PropsWithChildren<{
+    onClick?: () => void;
+    disabled?: boolean;
+    [k: string]: unknown;
+  }>) => (
+    <button onClick={onClick} disabled={disabled} {...props}>
+      {children}
+    </button>
   ),
   Input: (props: React.InputHTMLAttributes<HTMLInputElement>) => <input {...props} />,
 }));
@@ -35,7 +46,14 @@ describe('CreateKeyForm', () => {
   });
 
   it('calls createKey with trimmed name on valid submit', async () => {
-    const createKey = jest.fn().mockResolvedValue({ token: 'tok', name: 'my-key', _id: 'k1', lastFour: 'xxxx', createdAt: '', lastUsedAt: null });
+    const createKey = jest.fn().mockResolvedValue({
+      token: 'tok',
+      name: 'my-key',
+      _id: 'k1',
+      lastFour: 'xxxx',
+      createdAt: '',
+      lastUsedAt: null,
+    });
     render(<CreateKeyForm {...defaultProps} createKey={createKey} />);
     await userEvent.type(screen.getByRole('textbox'), '  my-key  ');
     fireEvent.click(screen.getByRole('button', { name: /generate key/i }));
@@ -43,7 +61,14 @@ describe('CreateKeyForm', () => {
   });
 
   it('calls onKeyCreated with token and keyName on success', async () => {
-    const createKey = jest.fn().mockResolvedValue({ token: 'the-token', name: 'my-key', _id: 'k1', lastFour: 'xxxx', createdAt: '', lastUsedAt: null });
+    const createKey = jest.fn().mockResolvedValue({
+      token: 'the-token',
+      name: 'my-key',
+      _id: 'k1',
+      lastFour: 'xxxx',
+      createdAt: '',
+      lastUsedAt: null,
+    });
     const onKeyCreated = jest.fn();
     render(<CreateKeyForm createKey={createKey} onKeyCreated={onKeyCreated} />);
     await userEvent.type(screen.getByRole('textbox'), 'my-key');
@@ -60,7 +85,14 @@ describe('CreateKeyForm', () => {
   });
 
   it('clears the input after successful creation', async () => {
-    const createKey = jest.fn().mockResolvedValue({ token: 'tok', name: 'my-key', _id: 'k1', lastFour: 'xxxx', createdAt: '', lastUsedAt: null });
+    const createKey = jest.fn().mockResolvedValue({
+      token: 'tok',
+      name: 'my-key',
+      _id: 'k1',
+      lastFour: 'xxxx',
+      createdAt: '',
+      lastUsedAt: null,
+    });
     render(<CreateKeyForm createKey={createKey} onKeyCreated={jest.fn()} />);
     const input = screen.getByRole('textbox');
     await userEvent.type(input, 'my-key');
@@ -70,7 +102,11 @@ describe('CreateKeyForm', () => {
 
   it('button shows loading state while createKey is in flight', async () => {
     let resolve!: () => void;
-    const createKey = jest.fn().mockReturnValue(new Promise<{ token: string; name: string }>((r) => { resolve = () => r({ token: 't', name: 'k' }); }));
+    const createKey = jest.fn().mockReturnValue(
+      new Promise<{ token: string; name: string }>((r) => {
+        resolve = () => r({ token: 't', name: 'k' });
+      }),
+    );
     render(<CreateKeyForm createKey={createKey} onKeyCreated={jest.fn()} />);
     await userEvent.type(screen.getByRole('textbox'), 'my-key');
     fireEvent.click(screen.getByRole('button', { name: /generate key/i }));
@@ -79,4 +115,5 @@ describe('CreateKeyForm', () => {
   });
 });
 
+// eslint-disable-next-line jest/no-export
 export {};
