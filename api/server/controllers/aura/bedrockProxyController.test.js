@@ -16,7 +16,11 @@ const { handleMessages, handleCountTokens } = require('./bedrockProxyController'
 
 function mockReq(overrides = {}) {
   return {
-    body: { model: 'claude-sonnet-4-6', messages: [{ role: 'user', content: 'hi' }], max_tokens: 16 },
+    body: {
+      model: 'claude-sonnet-4-6',
+      messages: [{ role: 'user', content: 'hi' }],
+      max_tokens: 16,
+    },
     headers: {},
     bedrockKeyDoc: { _id: 'kid1', userId: 'uid1' },
     ...overrides,
@@ -39,11 +43,21 @@ afterEach(() => jest.clearAllMocks());
 
 describe('handleMessages — non-streaming', () => {
   it('calls InvokeModelCommand and returns JSON on stream:false', async () => {
-    const fakeResponse = { body: Buffer.from(JSON.stringify({ id: 'msg_1', content: [{ text: 'hello' }], usage: { input_tokens: 10, output_tokens: 5 } })) };
+    const fakeResponse = {
+      body: Buffer.from(
+        JSON.stringify({
+          id: 'msg_1',
+          content: [{ text: 'hello' }],
+          usage: { input_tokens: 10, output_tokens: 5 },
+        }),
+      ),
+    };
     makeBedrockClient(() => Promise.resolve(fakeResponse));
     streamBedrockResponse.mockResolvedValue();
 
-    const req = mockReq({ body: { model: 'claude-sonnet-4-6', messages: [], max_tokens: 16, stream: false } });
+    const req = mockReq({
+      body: { model: 'claude-sonnet-4-6', messages: [], max_tokens: 16, stream: false },
+    });
     const res = mockRes();
     await handleMessages(req, res);
 
@@ -52,7 +66,9 @@ describe('handleMessages — non-streaming', () => {
   });
 
   it('defaults to non-streaming when stream is omitted', async () => {
-    const fakeResponse = { body: Buffer.from(JSON.stringify({ usage: { input_tokens: 5, output_tokens: 3 } })) };
+    const fakeResponse = {
+      body: Buffer.from(JSON.stringify({ usage: { input_tokens: 5, output_tokens: 3 } })),
+    };
     makeBedrockClient(() => Promise.resolve(fakeResponse));
 
     const req = mockReq();
@@ -65,11 +81,15 @@ describe('handleMessages — non-streaming', () => {
 
 describe('handleMessages — streaming', () => {
   it('calls InvokeModelWithResponseStreamCommand and pipes through streamer on stream:true', async () => {
-    async function* fakeStream() { yield { chunk: { bytes: Buffer.from('{}') } }; }
+    async function* fakeStream() {
+      yield { chunk: { bytes: Buffer.from('{}') } };
+    }
     makeBedrockClient(() => Promise.resolve({ body: fakeStream() }));
     streamBedrockResponse.mockResolvedValue();
 
-    const req = mockReq({ body: { model: 'claude-sonnet-4-6', messages: [], max_tokens: 16, stream: true } });
+    const req = mockReq({
+      body: { model: 'claude-sonnet-4-6', messages: [], max_tokens: 16, stream: true },
+    });
     const res = mockRes();
     await handleMessages(req, res);
 
@@ -138,18 +158,24 @@ describe('handleMessages — error mapping', () => {
     const req = mockReq();
     const res = mockRes();
     await handleMessages(req, res);
-    expect(auditLogger.proxyRequest).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 429 }));
+    expect(auditLogger.proxyRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 429 }),
+    );
   });
 });
 
 describe('handleMessages — observability', () => {
   it('emits bedrock_proxy_request log on success', async () => {
-    const fakeResponse = { body: Buffer.from(JSON.stringify({ usage: { input_tokens: 8, output_tokens: 4 } })) };
+    const fakeResponse = {
+      body: Buffer.from(JSON.stringify({ usage: { input_tokens: 8, output_tokens: 4 } })),
+    };
     makeBedrockClient(() => Promise.resolve(fakeResponse));
     const req = mockReq();
     const res = mockRes();
     await handleMessages(req, res);
-    expect(auditLogger.proxyRequest).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 200 }));
+    expect(auditLogger.proxyRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ statusCode: 200 }),
+    );
   });
 });
 
@@ -165,7 +191,9 @@ describe('handleCountTokens', () => {
 
   it('strips stream field before translating body', async () => {
     makeBedrockClient(() => Promise.resolve({ inputTokenCount: 5 }));
-    const req = mockReq({ body: { model: 'claude-sonnet-4-6', messages: [], max_tokens: 100, stream: true } });
+    const req = mockReq({
+      body: { model: 'claude-sonnet-4-6', messages: [], max_tokens: 100, stream: true },
+    });
     const res = mockRes();
     await handleCountTokens(req, res);
     // CountTokensCommand is auto-mocked — check constructor call args directly

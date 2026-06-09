@@ -3,7 +3,11 @@
 const { createUserRateLimiter, createIpRateLimiter } = require('./rateLimiter');
 
 function mockReq(overrides = {}) {
-  return { ip: '127.0.0.1', bedrockKeyDoc: { userId: { toString: () => 'user_123' } }, ...overrides };
+  return {
+    ip: '127.0.0.1',
+    bedrockKeyDoc: { userId: { toString: () => 'user_123' } },
+    ...overrides,
+  };
 }
 
 function mockRes() {
@@ -35,7 +39,9 @@ describe('createUserRateLimiter', () => {
   it('uses userId as key when bedrockKeyDoc is present', () => {
     const limiter = createUserRateLimiter();
     const req = mockReq();
-    const key = limiter.keyGenerator ? limiter.keyGenerator(req) : req.bedrockKeyDoc.userId.toString();
+    const key = limiter.keyGenerator
+      ? limiter.keyGenerator(req)
+      : req.bedrockKeyDoc.userId.toString();
     expect(key).toBe('user_123');
   });
 

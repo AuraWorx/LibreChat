@@ -21,14 +21,18 @@ const BEDROCK_BODY_FIELDS = new Set([
 // interleaved-thinking-2025-05-14 is excluded: it is only valid on Opus 4.x
 // with extended thinking, and we strip the `thinking` body field entirely.
 // Passing it for Sonnet/Haiku causes "invalid beta flag" ValidationException.
-const BEDROCK_VALID_BETAS = new Set([
-  'extended-output-2025-06-30',
-]);
+const BEDROCK_VALID_BETAS = new Set(['extended-output-2025-06-30']);
 
 function translateModelId(modelId) {
   if (!modelId) throw new Error('model is required');
   // Pass through fully-qualified Bedrock model IDs and cross-region inference profiles unchanged
-  if (modelId.startsWith('anthropic.') || modelId.startsWith('us.') || modelId.startsWith('global.') || modelId.startsWith('eu.') || modelId.startsWith('ap.')) {
+  if (
+    modelId.startsWith('anthropic.') ||
+    modelId.startsWith('us.') ||
+    modelId.startsWith('global.') ||
+    modelId.startsWith('eu.') ||
+    modelId.startsWith('ap.')
+  ) {
     return modelId;
   }
   return `anthropic.${modelId}`;
@@ -42,7 +46,10 @@ function extractSystemMessages(messages) {
   const systemParts = [];
   const filtered = messages.filter((m) => {
     if (m.role !== 'system') return true;
-    const content = typeof m.content === 'string' ? m.content : (m.content || []).map((c) => c.text ?? '').join('');
+    const content =
+      typeof m.content === 'string'
+        ? m.content
+        : (m.content || []).map((c) => c.text ?? '').join('');
     if (content) systemParts.push(content);
     return false;
   });
@@ -75,7 +82,10 @@ function translateRequestBody(anthropicBody, anthropicBetaHeader, opts) {
   }
 
   if (anthropicBetaHeader) {
-    const filtered = anthropicBetaHeader.split(',').map((s) => s.trim()).filter((b) => BEDROCK_VALID_BETAS.has(b));
+    const filtered = anthropicBetaHeader
+      .split(',')
+      .map((s) => s.trim())
+      .filter((b) => BEDROCK_VALID_BETAS.has(b));
     if (filtered.length > 0) body.anthropic_beta = filtered;
   }
 

@@ -57,19 +57,34 @@ describe('BedrockApiKey schema validation', () => {
 
   it('defaults allowedModels to null', () => {
     const { hash, lastFour } = BedrockApiKey.generateToken();
-    const doc = new BedrockApiKey({ userId: new mongoose.Types.ObjectId(), name: 'x', hash, lastFour });
+    const doc = new BedrockApiKey({
+      userId: new mongoose.Types.ObjectId(),
+      name: 'x',
+      hash,
+      lastFour,
+    });
     expect(doc.allowedModels).toBeNull();
   });
 
   it('defaults lastUsedAt to null', () => {
     const { hash, lastFour } = BedrockApiKey.generateToken();
-    const doc = new BedrockApiKey({ userId: new mongoose.Types.ObjectId(), name: 'x', hash, lastFour });
+    const doc = new BedrockApiKey({
+      userId: new mongoose.Types.ObjectId(),
+      name: 'x',
+      hash,
+      lastFour,
+    });
     expect(doc.lastUsedAt).toBeNull();
   });
 
   it('defaults active to true', () => {
     const { hash, lastFour } = BedrockApiKey.generateToken();
-    const doc = new BedrockApiKey({ userId: new mongoose.Types.ObjectId(), name: 'x', hash, lastFour });
+    const doc = new BedrockApiKey({
+      userId: new mongoose.Types.ObjectId(),
+      name: 'x',
+      hash,
+      lastFour,
+    });
     expect(doc.active).toBe(true);
   });
 });

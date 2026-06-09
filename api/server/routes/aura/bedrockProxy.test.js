@@ -8,7 +8,10 @@ const request = require('supertest');
 const express = require('express');
 const { bedrockProxyAuth } = require('../../middleware/aura/bedrockProxyAuth');
 const { createUserRateLimiter, createIpRateLimiter } = require('../../middleware/aura/rateLimiter');
-const { handleMessages, handleCountTokens } = require('../../controllers/aura/bedrockProxyController');
+const {
+  handleMessages,
+  handleCountTokens,
+} = require('../../controllers/aura/bedrockProxyController');
 
 function makeApp() {
   // Fresh require each call so route setup runs with current mocks
@@ -18,8 +21,14 @@ function makeApp() {
   jest.mock('../../controllers/aura/bedrockProxyController');
 
   const { bedrockProxyAuth: auth } = require('../../middleware/aura/bedrockProxyAuth');
-  const { createUserRateLimiter: mkUser, createIpRateLimiter: mkIp } = require('../../middleware/aura/rateLimiter');
-  const { handleMessages: hm, handleCountTokens: hct } = require('../../controllers/aura/bedrockProxyController');
+  const {
+    createUserRateLimiter: mkUser,
+    createIpRateLimiter: mkIp,
+  } = require('../../middleware/aura/rateLimiter');
+  const {
+    handleMessages: hm,
+    handleCountTokens: hct,
+  } = require('../../controllers/aura/bedrockProxyController');
 
   auth.mockImplementation((req, res, next) => next());
   const passThrough = jest.fn((req, res, next) => next());
@@ -68,7 +77,10 @@ describe('bedrockProxy route', () => {
     jest.mock('../../controllers/aura/bedrockProxyController');
 
     const { bedrockProxyAuth: auth } = require('../../middleware/aura/bedrockProxyAuth');
-    const { createUserRateLimiter: mkUser, createIpRateLimiter: mkIp } = require('../../middleware/aura/rateLimiter');
+    const {
+      createUserRateLimiter: mkUser,
+      createIpRateLimiter: mkIp,
+    } = require('../../middleware/aura/rateLimiter');
     const { handleMessages: hm } = require('../../controllers/aura/bedrockProxyController');
 
     auth.mockImplementation((req, res) => res.status(401).json({ error: 'unauthorized' }));

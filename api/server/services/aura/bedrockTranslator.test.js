@@ -95,7 +95,13 @@ describe('translateRequestBody', () => {
   });
 
   it('passes tools through unchanged', () => {
-    const tools = [{ name: 'calculator', description: 'does math', input_schema: { type: 'object', properties: {} } }];
+    const tools = [
+      {
+        name: 'calculator',
+        description: 'does math',
+        input_schema: { type: 'object', properties: {} },
+      },
+    ];
     const input = { ...baseBody, tools };
     const { body } = translateRequestBody(input);
     expect(body.tools).toEqual(tools);
@@ -138,8 +144,14 @@ describe('translateRequestBody', () => {
   });
 
   it('passes known Bedrock betas through', () => {
-    const { body } = translateRequestBody(baseBody, 'interleaved-thinking-2025-05-14,extended-output-2025-06-30');
-    expect(body.anthropic_beta).toEqual(['interleaved-thinking-2025-05-14', 'extended-output-2025-06-30']);
+    const { body } = translateRequestBody(
+      baseBody,
+      'interleaved-thinking-2025-05-14,extended-output-2025-06-30',
+    );
+    expect(body.anthropic_beta).toEqual([
+      'interleaved-thinking-2025-05-14',
+      'extended-output-2025-06-30',
+    ]);
   });
 
   it('filters out client-tool betas that Bedrock does not recognise', () => {
