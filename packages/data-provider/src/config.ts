@@ -1818,6 +1818,10 @@ export enum SettingsTabValues {
    * Tab for Personalization Settings
    */
   PERSONALIZATION = 'personalization',
+  /**
+   * Tab for Bedrock API Key management (AuraWorx)
+   */
+  API_KEYS = 'apiKeys',
 }
 
 export enum STTProviders {

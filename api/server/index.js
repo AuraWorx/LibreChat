@@ -185,6 +185,8 @@ const startServer = async () => {
 
   app.use('/api/tags', routes.tags);
   app.use('/api/mcp', routes.mcp);
+  app.use('/api/bedrock-keys', routes.bedrockKeys);
+  app.use('/bedrock', routes.bedrockProxy);
 
   /** 404 for unmatched API routes */
   app.use('/api', apiNotFound);

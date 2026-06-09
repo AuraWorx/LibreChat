@@ -21,11 +21,49 @@ allowed_modifications:
       Upstream PR candidate.
       Tracks: AuraWorx/librechat-suite#269
 
+  - path: api/server/routes/index.js
+    reason: |
+      Exports bedrockKeys and bedrockProxy routers so they are picked up by
+      api/server/index.js. Entry-point only — no logic here.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: api/server/index.js
+    reason: |
+      Mounts /api/bedrock-keys (CRUD) and /bedrock (proxy) routers.
+      Two app.use() lines only — no other changes.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: client/jest.config.cjs
+    reason: |
+      Adds client/src/components/aura/ and client/src/hooks/aura/ to the
+      moduleNameMapper so Jest can resolve aura component imports in tests.
+      Entry-point config only — no logic here.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: client/src/components/Nav/Settings.tsx
+    reason: |
+      Adds the Bedrock API Keys tab to the LibreChat Settings dialog.
+      Minimal change: one import + one tab entry in the tabs array.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: client/src/locales/en/translation.json
+    reason: |
+      Adds English i18n keys for the Bedrock API Keys settings tab label.
+      No other locale changes — downstream translations are additive.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: packages/data-provider/src/config.ts
+    reason: |
+      Extends the EndpointSettings type to include bedrockApiKeys feature flag.
+      Type-only addition — no runtime logic changes.
+      Tracks: AuraWorx/librechat-suite#276
+
 aura_directories:
-  # Placeholders for future AuraWorx feature work (Steps 2-6 of the fork plan).
-  # Empty at v0.8.5-aura.1; populated by subsequent feature PRs.
+  # Populated by Steps 2-4 of the Bedrock API Keys feature (#276).
   - api/server/controllers/aura/
   - api/server/routes/aura/
+  - api/server/middleware/aura/
+  - api/server/services/aura/
   - api/models/aura/
   - client/src/components/aura/
   - client/src/hooks/aura/
