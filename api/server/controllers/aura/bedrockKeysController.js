@@ -2,6 +2,7 @@
 
 const mongoose = require('mongoose');
 const BedrockApiKey = require('../../../models/aura/BedrockApiKey');
+const BedrockProxyConfig = require('../../../models/aura/BedrockProxyConfig');
 const auditLogger = require('../../services/aura/auditLogger');
 
 async function createKey(req, res) {
@@ -20,8 +21,29 @@ async function createKey(req, res) {
       return res.status(409).json({ error: 'A key with this name already exists' });
     }
 
+    // Stamp key-level defaults from global config so each key shows its effective daily limits
+    let defaultLimits = null;
+    try {
+      const config = await BedrockProxyConfig.findById('default').lean();
+      const kd = config?.keyDefaults ?? {};
+      if (kd.dailyInputTokens || kd.dailyOutputTokens || kd.dailyCacheWriteTokens) {
+        defaultLimits = {
+          maxOutputTokensPerRequest: null,
+          dailyInputTokens:      kd.dailyInputTokens      ?? null,
+          dailyOutputTokens:     kd.dailyOutputTokens     ?? null,
+          dailyCacheWriteTokens: kd.dailyCacheWriteTokens ?? null,
+        };
+      }
+    } catch { /* non-fatal — proceed without defaults */ }
+
     const { token, hash, lastFour } = BedrockApiKey.generateToken();
-    const doc = await BedrockApiKey.create({ userId, name: name.trim(), hash, lastFour });
+    const doc = await BedrockApiKey.create({
+      userId,
+      name: name.trim(),
+      hash,
+      lastFour,
+      ...(defaultLimits && { limits: defaultLimits }),
+    });
 
     auditLogger.keyCreated({
       actor: { userId, via: 'settings_ui' },
