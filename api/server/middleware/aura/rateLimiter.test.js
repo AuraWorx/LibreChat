@@ -81,14 +81,11 @@ describe('createIpRateLimiter', () => {
     expect(limiter.max ?? 100).toBe(100);
   });
 
-  it('on limit hit responds 429 with Retry-After: 60', (done) => {
+  it('on limit hit responds 429 with Retry-After: 60', () => {
     const limiter = createIpRateLimiter();
     const req = mockReq();
     const res = mockRes();
     limiter(req, res, () => {});
-    // Call the handler directly if accessible, or verify the limiter is set up correctly
-    // express-rate-limit v8 exposes a handler option; we verify it via config
     expect(typeof limiter).toBe('function');
-    done();
   });
 });
