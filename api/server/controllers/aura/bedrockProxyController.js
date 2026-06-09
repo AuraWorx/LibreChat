@@ -10,6 +10,7 @@ const { translateRequestBody } = require('../../services/aura/bedrockTranslator'
 const { streamBedrockResponse } = require('../../services/aura/bedrockStreamer');
 const auditLogger = require('../../services/aura/auditLogger');
 const BedrockDailyUsage = require('../../../models/aura/BedrockDailyUsage');
+const BedrockProxyConfig = require('../../../models/aura/BedrockProxyConfig');
 
 function getClient() {
   return new BedrockRuntimeClient({ region: process.env.AWS_REGION || 'us-east-1' });
@@ -35,13 +36,35 @@ function getEnvLimit(envVar) {
   return v > 0 ? v : null;
 }
 
-function getEffectiveLimits(keyDoc) {
+// 60-second in-memory cache for DB-stored default limits
+let _dbDefaultsCache = null;
+let _dbDefaultsCacheAt = 0;
+const DB_DEFAULTS_TTL_MS = 60_000;
+
+async function getDbDefaults() {
+  const now = Date.now();
+  if (_dbDefaultsCache && now - _dbDefaultsCacheAt < DB_DEFAULTS_TTL_MS) {
+    return _dbDefaultsCache;
+  }
+  try {
+    const doc = await BedrockProxyConfig.findById('default').lean();
+    _dbDefaultsCache = doc?.limits ?? null;
+    _dbDefaultsCacheAt = now;
+  } catch {
+    // DB unavailable — keep stale cache or return null
+    if (!_dbDefaultsCache) _dbDefaultsCache = null;
+  }
+  return _dbDefaultsCache;
+}
+
+async function getEffectiveLimits(keyDoc) {
   const k = keyDoc?.limits ?? {};
+  const db = await getDbDefaults();
   return {
-    maxOutputTokensPerRequest: k.maxOutputTokensPerRequest ?? getEnvLimit('BEDROCK_MAX_OUTPUT_TOKENS_PER_REQUEST'),
-    dailyInputTokens:          k.dailyInputTokens          ?? getEnvLimit('BEDROCK_DAILY_INPUT_TOKEN_LIMIT'),
-    dailyOutputTokens:         k.dailyOutputTokens         ?? getEnvLimit('BEDROCK_DAILY_OUTPUT_TOKEN_LIMIT'),
-    dailyCacheWriteTokens:     k.dailyCacheWriteTokens     ?? getEnvLimit('BEDROCK_DAILY_CACHE_WRITE_TOKEN_LIMIT'),
+    maxOutputTokensPerRequest: k.maxOutputTokensPerRequest ?? db?.maxOutputTokensPerRequest ?? getEnvLimit('BEDROCK_MAX_OUTPUT_TOKENS_PER_REQUEST'),
+    dailyInputTokens:          k.dailyInputTokens          ?? db?.dailyInputTokens          ?? getEnvLimit('BEDROCK_DAILY_INPUT_TOKEN_LIMIT'),
+    dailyOutputTokens:         k.dailyOutputTokens         ?? db?.dailyOutputTokens         ?? getEnvLimit('BEDROCK_DAILY_OUTPUT_TOKEN_LIMIT'),
+    dailyCacheWriteTokens:     k.dailyCacheWriteTokens     ?? db?.dailyCacheWriteTokens     ?? getEnvLimit('BEDROCK_DAILY_CACHE_WRITE_TOKEN_LIMIT'),
   };
 }
 
@@ -108,7 +131,7 @@ async function handleMessages(req, res) {
     }
 
     // Daily token limit pre-call check
-    const limits = getEffectiveLimits(bedrockKeyDoc);
+    const limits = await getEffectiveLimits(bedrockKeyDoc);
     const exceeded = await checkDailyLimits(userId, limits);
     if (exceeded) {
       return res.status(429).json({
@@ -171,7 +194,7 @@ async function handleMessages(req, res) {
 async function handleCountTokens(req, res) {
   const { body: anthropicBody, headers, bedrockKeyDoc } = req;
   const betaHeader = headers['anthropic-beta'];
-  const limits = getEffectiveLimits(bedrockKeyDoc);
+  const limits = await getEffectiveLimits(bedrockKeyDoc);
 
   try {
     const { modelId, body } = translateRequestBody(anthropicBody, betaHeader, {
