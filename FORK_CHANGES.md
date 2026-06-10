@@ -34,6 +34,12 @@ The machine-readable source of truth for the boundary contract is
 - **Mechanism:** Two `app.use()` lines only
 - **Conflict risk on upstream sync:** Medium (upstream occasionally adds new mounts here)
 
+### `client/src/components/Auth/AuthLayout.tsx`
+
+- **Reason:** Login page background image — render `/assets/login-background.png` (uploaded via LibreAdmin branding flow) as full-bleed background on all auth pages
+- **Mechanism:** Root `<div>` gains `bg-cover bg-center bg-no-repeat` Tailwind classes and `style={{ backgroundImage: 'url(/assets/login-background.png)' }}`; 4 added lines; graceful degradation when asset is absent (browser ignores missing background-image, existing `bg-white`/`dark:bg-gray-900` remain)
+- **Conflict risk on upstream sync:** Low (file changes rarely; conflict is a trivial one-line merge)
+
 ## AuraWorx-only directories
 
 All listed under `aura/` subdirectories within upstream paths.

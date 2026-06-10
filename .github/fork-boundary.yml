@@ -33,6 +33,15 @@ allowed_modifications:
       Two app.use() lines only — no other changes.
       Tracks: AuraWorx/librechat-suite#276
 
+  - path: client/src/components/Auth/AuthLayout.tsx
+    reason: |
+      Adds login page background image support. Expands the root <div>
+      to a multi-line form and adds bg-cover/bg-center/bg-no-repeat Tailwind
+      classes plus a style prop pointing to /assets/login-background.png.
+      When the asset is absent the browser silently ignores the style and
+      bg-white/dark:bg-gray-900 remain — no visible regression.
+      4 added lines. Tracks: AuraWorx/librechat-suite (custom-login-background)
+
 aura_directories:
   # Populated by Steps 2-4 of the Bedrock API Keys feature (#276).
   - api/server/controllers/aura/
