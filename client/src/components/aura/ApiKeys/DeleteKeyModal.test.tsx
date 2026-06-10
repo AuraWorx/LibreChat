@@ -3,8 +3,14 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import DeleteKeyModal from './DeleteKeyModal';
 
 jest.mock('@librechat/client', () => ({
-  Button: ({ children, onClick, ...props }: React.PropsWithChildren<{ onClick?: () => void; [k: string]: unknown }>) => (
-    <button onClick={onClick} {...props}>{children}</button>
+  Button: ({
+    children,
+    onClick,
+    ...props
+  }: React.PropsWithChildren<{ onClick?: () => void; [k: string]: unknown }>) => (
+    <button onClick={onClick} {...props}>
+      {children}
+    </button>
   ),
 }));
 
@@ -57,4 +63,5 @@ describe('DeleteKeyModal', () => {
   });
 });
 
+// eslint-disable-next-line jest/no-export
 export {};

@@ -3,7 +3,11 @@
 const { createUserRateLimiter, createIpRateLimiter } = require('./rateLimiter');
 
 function mockReq(overrides = {}) {
-  return { ip: '127.0.0.1', bedrockKeyDoc: { userId: { toString: () => 'user_123' } }, ...overrides };
+  return {
+    ip: '127.0.0.1',
+    bedrockKeyDoc: { userId: { toString: () => 'user_123' } },
+    ...overrides,
+  };
 }
 
 function mockRes() {
@@ -35,7 +39,9 @@ describe('createUserRateLimiter', () => {
   it('uses userId as key when bedrockKeyDoc is present', () => {
     const limiter = createUserRateLimiter();
     const req = mockReq();
-    const key = limiter.keyGenerator ? limiter.keyGenerator(req) : req.bedrockKeyDoc.userId.toString();
+    const key = limiter.keyGenerator
+      ? limiter.keyGenerator(req)
+      : req.bedrockKeyDoc.userId.toString();
     expect(key).toBe('user_123');
   });
 
@@ -44,6 +50,12 @@ describe('createUserRateLimiter', () => {
     const req = mockReq({ bedrockKeyDoc: undefined });
     const key = limiter.keyGenerator ? limiter.keyGenerator(req) : req.ip;
     expect(key).toBe('127.0.0.1');
+  });
+
+  it('normalizes the IPv6 fallback to a /56 subnet to prevent per-address bypass', () => {
+    const limiter = createUserRateLimiter();
+    const req = mockReq({ bedrockKeyDoc: undefined, ip: '2001:db8::1' });
+    expect(limiter.keyGenerator(req)).toBe('2001:db8::/56');
   });
 
   it('defaults max to 60', () => {
@@ -75,14 +87,11 @@ describe('createIpRateLimiter', () => {
     expect(limiter.max ?? 100).toBe(100);
   });
 
-  it('on limit hit responds 429 with Retry-After: 60', (done) => {
+  it('on limit hit responds 429 with Retry-After: 60', () => {
     const limiter = createIpRateLimiter();
     const req = mockReq();
     const res = mockRes();
     limiter(req, res, () => {});
-    // Call the handler directly if accessible, or verify the limiter is set up correctly
-    // express-rate-limit v8 exposes a handler option; we verify it via config
     expect(typeof limiter).toBe('function');
-    done();
   });
 });

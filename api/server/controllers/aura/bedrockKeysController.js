@@ -29,12 +29,14 @@ async function createKey(req, res) {
       if (kd.dailyInputTokens || kd.dailyOutputTokens || kd.dailyCacheWriteTokens) {
         defaultLimits = {
           maxOutputTokensPerRequest: null,
-          dailyInputTokens:      kd.dailyInputTokens      ?? null,
-          dailyOutputTokens:     kd.dailyOutputTokens     ?? null,
+          dailyInputTokens: kd.dailyInputTokens ?? null,
+          dailyOutputTokens: kd.dailyOutputTokens ?? null,
           dailyCacheWriteTokens: kd.dailyCacheWriteTokens ?? null,
         };
       }
-    } catch { /* non-fatal — proceed without defaults */ }
+    } catch {
+      /* non-fatal — proceed without defaults */
+    }
 
     const { token, hash, lastFour } = BedrockApiKey.generateToken();
     const doc = await BedrockApiKey.create({
@@ -66,9 +68,7 @@ async function createKey(req, res) {
 async function listKeys(req, res) {
   try {
     const userId = req.user.id;
-    const raw = await BedrockApiKey.find({ userId, active: true })
-      .sort({ createdAt: -1 })
-      .lean();
+    const raw = await BedrockApiKey.find({ userId, active: true }).sort({ createdAt: -1 }).lean();
 
     const keys = raw.map(({ _id, name, lastFour, createdAt, lastUsedAt, active }) => ({
       id: _id.toString(),

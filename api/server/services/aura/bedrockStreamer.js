@@ -24,11 +24,16 @@ async function streamBedrockResponse(bedrockStream, res) {
           } else if (event.type === 'message_delta' && event.usage) {
             usage.outputTokens = event.usage.output_tokens ?? 0;
           }
-        } catch { /* non-JSON chunk — skip */ }
+        } catch {
+          /* non-JSON chunk — skip */
+        }
       }
     }
   } catch (err) {
-    const errorEvent = JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'Stream interrupted' } });
+    const errorEvent = JSON.stringify({
+      type: 'error',
+      error: { type: 'api_error', message: 'Stream interrupted' },
+    });
     res.write(`data: ${errorEvent}\n\n`);
   }
 

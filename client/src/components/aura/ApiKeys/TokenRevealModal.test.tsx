@@ -3,8 +3,19 @@ import { render, screen, fireEvent, act } from '@testing-library/react';
 import TokenRevealModal from './TokenRevealModal';
 
 jest.mock('@librechat/client', () => ({
-  Button: ({ children, onClick, disabled, ...props }: React.PropsWithChildren<{ onClick?: () => void; disabled?: boolean; [k: string]: unknown }>) => (
-    <button onClick={onClick} disabled={disabled} {...props}>{children}</button>
+  Button: ({
+    children,
+    onClick,
+    disabled,
+    ...props
+  }: React.PropsWithChildren<{
+    onClick?: () => void;
+    disabled?: boolean;
+    [k: string]: unknown;
+  }>) => (
+    <button onClick={onClick} disabled={disabled} {...props}>
+      {children}
+    </button>
   ),
 }));
 
@@ -38,7 +49,9 @@ describe('TokenRevealModal', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: /copy/i }));
     });
-    expect(navigator.clipboard.writeText).toHaveBeenCalledWith('aB3cDxK2pQ9mNvR7tZ8sLfHgYj4UwI6oVx9zT');
+    expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
+      'aB3cDxK2pQ9mNvR7tZ8sLfHgYj4UwI6oVx9zT',
+    );
   });
 
   it('Copy button text changes to "Copied!" after click', async () => {
@@ -71,7 +84,11 @@ describe('TokenRevealModal', () => {
     });
     // jsdom may not have execCommand — define it so spyOn works
     if (!document.execCommand) {
-      Object.defineProperty(document, 'execCommand', { value: jest.fn(), writable: true, configurable: true });
+      Object.defineProperty(document, 'execCommand', {
+        value: jest.fn(),
+        writable: true,
+        configurable: true,
+      });
     }
     const execSpy = jest.spyOn(document, 'execCommand').mockReturnValue(true);
     render(<TokenRevealModal {...defaultProps} />);
@@ -82,4 +99,5 @@ describe('TokenRevealModal', () => {
   });
 });
 
+// eslint-disable-next-line jest/no-export
 export {};

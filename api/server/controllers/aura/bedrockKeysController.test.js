@@ -24,9 +24,18 @@ afterEach(() => jest.clearAllMocks());
 describe('createKey', () => {
   it('returns 201 with token, lastFour, id, name, createdAt on success', async () => {
     const fakeToken = 'a'.repeat(40);
-    BedrockApiKey.generateToken.mockReturnValue({ token: fakeToken, hash: 'hashval', lastFour: 'aaaa' });
+    BedrockApiKey.generateToken.mockReturnValue({
+      token: fakeToken,
+      hash: 'hashval',
+      lastFour: 'aaaa',
+    });
     BedrockApiKey.findOne.mockResolvedValue(null);
-    const fakeDoc = { _id: new mongoose.Types.ObjectId(), name: 'my-key', lastFour: 'aaaa', createdAt: new Date() };
+    const fakeDoc = {
+      _id: new mongoose.Types.ObjectId(),
+      name: 'my-key',
+      lastFour: 'aaaa',
+      createdAt: new Date(),
+    };
     BedrockApiKey.create.mockResolvedValue(fakeDoc);
 
     const req = { user: { id: userId }, body: { name: 'my-key' } };
@@ -72,9 +81,17 @@ describe('createKey', () => {
   it('allows same name across different users', async () => {
     BedrockApiKey.findOne.mockResolvedValue(null);
     BedrockApiKey.generateToken.mockReturnValue({ token: 'tok', hash: 'h', lastFour: 'x9zT' });
-    const fakeDoc = { _id: new mongoose.Types.ObjectId(), name: 'shared', lastFour: 'x9zT', createdAt: new Date() };
+    const fakeDoc = {
+      _id: new mongoose.Types.ObjectId(),
+      name: 'shared',
+      lastFour: 'x9zT',
+      createdAt: new Date(),
+    };
     BedrockApiKey.create.mockResolvedValue(fakeDoc);
-    const req = { user: { id: new mongoose.Types.ObjectId().toString() }, body: { name: 'shared' } };
+    const req = {
+      user: { id: new mongoose.Types.ObjectId().toString() },
+      body: { name: 'shared' },
+    };
     const res = mockRes();
     await createKey(req, res);
     expect(res.status).toHaveBeenCalledWith(201);
@@ -83,7 +100,12 @@ describe('createKey', () => {
   it('emits key.created audit event', async () => {
     BedrockApiKey.findOne.mockResolvedValue(null);
     BedrockApiKey.generateToken.mockReturnValue({ token: 'tok', hash: 'h', lastFour: 'x9zT' });
-    const fakeDoc = { _id: new mongoose.Types.ObjectId(), name: 'audit-key', lastFour: 'x9zT', createdAt: new Date() };
+    const fakeDoc = {
+      _id: new mongoose.Types.ObjectId(),
+      name: 'audit-key',
+      lastFour: 'x9zT',
+      createdAt: new Date(),
+    };
     BedrockApiKey.create.mockResolvedValue(fakeDoc);
     const req = { user: { id: userId }, body: { name: 'audit-key' }, requestId: 'req_1' };
     const res = mockRes();
@@ -93,8 +115,10 @@ describe('createKey', () => {
 });
 
 describe('listKeys', () => {
-  it('returns only the authenticated user\'s active keys', async () => {
-    const keys = [{ _id: new mongoose.Types.ObjectId(), name: 'a', lastFour: '1111', active: true }];
+  it("returns only the authenticated user's active keys", async () => {
+    const keys = [
+      { _id: new mongoose.Types.ObjectId(), name: 'a', lastFour: '1111', active: true },
+    ];
     BedrockApiKey.find.mockReturnValue({
       sort: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(keys) }),
     });
@@ -106,7 +130,17 @@ describe('listKeys', () => {
   });
 
   it('never returns hash field', async () => {
-    const rawKeys = [{ _id: new mongoose.Types.ObjectId(), name: 'a', lastFour: '1111', hash: 'SECRET', active: true, createdAt: new Date(), lastUsedAt: null }];
+    const rawKeys = [
+      {
+        _id: new mongoose.Types.ObjectId(),
+        name: 'a',
+        lastFour: '1111',
+        hash: 'SECRET',
+        active: true,
+        createdAt: new Date(),
+        lastUsedAt: null,
+      },
+    ];
     BedrockApiKey.find.mockReturnValue({
       sort: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(rawKeys) }),
     });
@@ -119,9 +153,9 @@ describe('listKeys', () => {
 });
 
 describe('deleteKey', () => {
-  it('returns 204 on successful soft delete', async () => {
+  it('returns 204 on successful delete', async () => {
     BedrockApiKey.findOne.mockResolvedValue({ _id: keyId, name: 'k', lastFour: '1234' });
-    BedrockApiKey.softDelete.mockResolvedValue({ modifiedCount: 1 });
+    BedrockApiKey.deleteOne.mockResolvedValue({ deletedCount: 1 });
     const req = { user: { id: userId }, params: { id: keyId } };
     const res = mockRes();
     await deleteKey(req, res);
@@ -145,7 +179,7 @@ describe('deleteKey', () => {
 
   it('emits key.deleted audit event on success', async () => {
     BedrockApiKey.findOne.mockResolvedValue({ _id: keyId, name: 'k', lastFour: '1234' });
-    BedrockApiKey.softDelete.mockResolvedValue({ modifiedCount: 1 });
+    BedrockApiKey.deleteOne.mockResolvedValue({ deletedCount: 1 });
     const req = { user: { id: userId }, params: { id: keyId }, requestId: 'req_del' };
     const res = mockRes();
     await deleteKey(req, res);

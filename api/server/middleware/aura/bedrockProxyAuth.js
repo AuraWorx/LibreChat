@@ -31,7 +31,11 @@ async function validateBedrockKey(rawToken) {
 async function bedrockProxyAuth(req, res, next) {
   const token = extractToken(req);
   if (!token) {
-    auditLogger.keyRejected({ reason: 'missing_token', lastFour: null, requestId: req.requestId ?? null });
+    auditLogger.keyRejected({
+      reason: 'missing_token',
+      lastFour: null,
+      requestId: req.requestId ?? null,
+    });
     return res.status(401).json({ error: 'unauthorized', message: 'Missing API key' });
   }
   try {
@@ -55,7 +59,9 @@ async function bedrockProxyAuth(req, res, next) {
   } catch (err) {
     if (err.statusCode === 503) {
       res.set('Retry-After', String(err.retryAfter ?? 5));
-      return res.status(503).json({ error: 'service_unavailable', message: 'Starting up, retry in 5s' });
+      return res
+        .status(503)
+        .json({ error: 'service_unavailable', message: 'Starting up, retry in 5s' });
     }
     return res.status(500).json({ error: 'internal_error' });
   }

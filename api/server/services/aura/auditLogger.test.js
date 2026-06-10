@@ -35,7 +35,11 @@ describe('auditLogger', () => {
   });
 
   it('never includes hash or raw token in output', () => {
-    keyCreated({ actor: baseActor, key: { ...baseKey, hash: 'secret-hash', token: 'raw-token' }, requestId: 'req_3' });
+    keyCreated({
+      actor: baseActor,
+      key: { ...baseKey, hash: 'secret-hash', token: 'raw-token' },
+      requestId: 'req_3',
+    });
     const written = consoleSpy.mock.calls.map((c) => c[0]).join('');
     expect(written).not.toContain('secret-hash');
     expect(written).not.toContain('raw-token');

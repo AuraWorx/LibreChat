@@ -1,3 +1,4 @@
+/* eslint-disable i18next/no-literal-string */
 import React, { useState } from 'react';
 import { OGDialog, OGDialogContent } from '@librechat/client';
 import { cn } from '~/utils';

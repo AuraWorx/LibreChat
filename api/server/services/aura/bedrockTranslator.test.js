@@ -95,7 +95,13 @@ describe('translateRequestBody', () => {
   });
 
   it('passes tools through unchanged', () => {
-    const tools = [{ name: 'calculator', description: 'does math', input_schema: { type: 'object', properties: {} } }];
+    const tools = [
+      {
+        name: 'calculator',
+        description: 'does math',
+        input_schema: { type: 'object', properties: {} },
+      },
+    ];
     const input = { ...baseBody, tools };
     const { body } = translateRequestBody(input);
     expect(body.tools).toEqual(tools);
@@ -137,9 +143,12 @@ describe('translateRequestBody', () => {
     expect(body.inference_geo).toBeUndefined();
   });
 
-  it('passes known Bedrock betas through', () => {
-    const { body } = translateRequestBody(baseBody, 'interleaved-thinking-2025-05-14,extended-output-2025-06-30');
-    expect(body.anthropic_beta).toEqual(['interleaved-thinking-2025-05-14', 'extended-output-2025-06-30']);
+  it('passes Bedrock-valid betas through and drops interleaved-thinking', () => {
+    const { body } = translateRequestBody(
+      baseBody,
+      'interleaved-thinking-2025-05-14,extended-output-2025-06-30',
+    );
+    expect(body.anthropic_beta).toEqual(['extended-output-2025-06-30']);
   });
 
   it('filters out client-tool betas that Bedrock does not recognise', () => {
@@ -149,9 +158,9 @@ describe('translateRequestBody', () => {
   });
 
   it('keeps only Bedrock-valid betas when header contains a mix', () => {
-    const header = 'claude-code-2025-03-07,interleaved-thinking-2025-05-14,unknown-flag';
+    const header = 'claude-code-2025-03-07,extended-output-2025-06-30,unknown-flag';
     const { body } = translateRequestBody(baseBody, header);
-    expect(body.anthropic_beta).toEqual(['interleaved-thinking-2025-05-14']);
+    expect(body.anthropic_beta).toEqual(['extended-output-2025-06-30']);
   });
 
   it('omits anthropic_beta when header is absent', () => {
@@ -162,5 +171,33 @@ describe('translateRequestBody', () => {
   it('omits anthropic_beta when header is empty string', () => {
     const { body } = translateRequestBody(baseBody, '');
     expect(body.anthropic_beta).toBeUndefined();
+  });
+
+  it('caps max_tokens to maxOutputTokensPerRequest when the request exceeds it', () => {
+    const { body } = translateRequestBody({ ...baseBody, max_tokens: 8000 }, undefined, {
+      maxOutputTokensPerRequest: 4000,
+    });
+    expect(body.max_tokens).toBe(4000);
+  });
+
+  it('sets max_tokens to the cap when the request omits it', () => {
+    const { body } = translateRequestBody(
+      { model: baseBody.model, messages: baseBody.messages },
+      undefined,
+      { maxOutputTokensPerRequest: 4000 },
+    );
+    expect(body.max_tokens).toBe(4000);
+  });
+
+  it('leaves max_tokens untouched when below the cap', () => {
+    const { body } = translateRequestBody({ ...baseBody, max_tokens: 1000 }, undefined, {
+      maxOutputTokensPerRequest: 4000,
+    });
+    expect(body.max_tokens).toBe(1000);
+  });
+
+  it('leaves max_tokens untouched when no cap is supplied', () => {
+    const { body } = translateRequestBody({ ...baseBody, max_tokens: 8000 });
+    expect(body.max_tokens).toBe(8000);
   });
 });

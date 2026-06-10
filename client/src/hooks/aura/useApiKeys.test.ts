@@ -1,8 +1,12 @@
 import { renderHook, act } from '@testing-library/react';
 import { useApiKeys } from './useApiKeys';
 
+jest.mock('~/hooks/AuthContext', () => ({
+  useAuthContext: () => ({ token: 'test-token' }),
+}));
+
 const MOCK_KEY = {
-  _id: 'key1',
+  id: 'key1',
   name: 'my-key',
   lastFour: 'x9zT',
   createdAt: '2026-05-28T00:00:00.000Z',
@@ -22,7 +26,7 @@ function mockFetch(status: number, body: unknown) {
 
 afterEach(() => {
   jest.restoreAllMocks();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
   (global as any).fetch = undefined;
 });
 
@@ -38,12 +42,18 @@ describe('useApiKeys — fetchKeys', () => {
   it('sets isLoading true during fetch and false after', async () => {
     let resolveFetch!: (v: Response) => void;
     global.fetch = jest.fn().mockReturnValue(
-      new Promise<Response>((r) => { resolveFetch = r; }),
+      new Promise<Response>((r) => {
+        resolveFetch = r;
+      }),
     );
     const { result } = renderHook(() => useApiKeys());
     expect(result.current.isLoading).toBe(true);
     await act(async () => {
-      resolveFetch({ ok: true, status: 200, json: () => Promise.resolve({ keys: [] }) } as Response);
+      resolveFetch({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ keys: [] }),
+      } as Response);
     });
     expect(result.current.isLoading).toBe(false);
   });
@@ -66,10 +76,13 @@ describe('useApiKeys — createKey', () => {
     await act(async () => {
       await result.current.createKey('my-key');
     });
-    expect(postSpy).toHaveBeenCalledWith('/api/bedrock-keys', expect.objectContaining({
-      method: 'POST',
-      body: JSON.stringify({ name: 'my-key' }),
-    }));
+    expect(postSpy).toHaveBeenCalledWith(
+      '/api/bedrock-keys',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ name: 'my-key' }),
+      }),
+    );
   });
 
   it('returns the token string from the 201 response', async () => {
@@ -122,9 +135,12 @@ describe('useApiKeys — deleteKey', () => {
     await act(async () => {
       await result.current.deleteKey('key1');
     });
-    expect(deleteSpy).toHaveBeenCalledWith('/api/bedrock-keys/key1', expect.objectContaining({
-      method: 'DELETE',
-    }));
+    expect(deleteSpy).toHaveBeenCalledWith(
+      '/api/bedrock-keys/key1',
+      expect.objectContaining({
+        method: 'DELETE',
+      }),
+    );
   });
 
   it('removes the key from local state on 204', async () => {
@@ -152,4 +168,5 @@ describe('useApiKeys — deleteKey', () => {
   });
 });
 
+// eslint-disable-next-line jest/no-export
 export {};

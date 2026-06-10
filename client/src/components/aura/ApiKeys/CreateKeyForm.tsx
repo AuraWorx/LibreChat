@@ -55,10 +55,7 @@ export default function CreateKeyForm({ createKey, onKeyCreated }: CreateKeyForm
           maxLength={101}
           className="flex-1 text-text-primary"
         />
-        <Button
-          type="submit"
-          disabled={!trimmed || isLoading}
-        >
+        <Button type="submit" disabled={!trimmed || isLoading}>
           {isLoading ? 'Generating…' : 'Generate Key'}
         </Button>
       </div>

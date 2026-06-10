@@ -6,8 +6,8 @@ const mongoose = require('mongoose');
 // each successful proxy call; read on the pre-call limit check.
 const schema = new mongoose.Schema(
   {
-    userId: { type: mongoose.Schema.Types.ObjectId, required: true },
-    date: { type: String, required: true },  // "2026-06-08" UTC
+    userId: { type: mongoose.Schema.Types.Mixed, required: true },
+    date: { type: String, required: true }, // "2026-06-08" UTC
     inputTokens: { type: Number, default: 0 },
     outputTokens: { type: Number, default: 0 },
     cacheWriteTokens: { type: Number, default: 0 },

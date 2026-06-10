@@ -56,43 +56,49 @@ export function useApiKeys() {
     fetchKeys();
   }, [fetchKeys]);
 
-  const createKey = useCallback(async (name: string): Promise<CreateKeyResult> => {
-    try {
-      const res = await fetch('/api/bedrock-keys', {
-        method: 'POST',
-        headers: authHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ name }),
-      });
-      if (res.status === 409) {
-        return { error: 'duplicate_name' };
+  const createKey = useCallback(
+    async (name: string): Promise<CreateKeyResult> => {
+      try {
+        const res = await fetch('/api/bedrock-keys', {
+          method: 'POST',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify({ name }),
+        });
+        if (res.status === 409) {
+          return { error: 'duplicate_name' };
+        }
+        if (!res.ok) {
+          return { error: 'create_failed' };
+        }
+        const data = await res.json();
+        const { token: _token, ...keyWithoutToken } = data;
+        setKeys((prev) => [...prev, keyWithoutToken as ApiKey]);
+        return data;
+      } catch {
+        return { error: 'network_error' };
       }
-      if (!res.ok) {
-        return { error: 'create_failed' };
-      }
-      const data = await res.json();
-      const { token: _token, ...keyWithoutToken } = data;
-      setKeys((prev) => [...prev, keyWithoutToken as ApiKey]);
-      return data;
-    } catch {
-      return { error: 'network_error' };
-    }
-  }, [authHeaders]);
+    },
+    [authHeaders],
+  );
 
-  const deleteKey = useCallback(async (id: string): Promise<void> => {
-    const snapshot = keys;
-    setKeys((prev) => prev.filter((k) => k.id !== id));
-    try {
-      const res = await fetch(`/api/bedrock-keys/${id}`, {
-        method: 'DELETE',
-        headers: authHeaders(),
-      });
-      if (!res.ok) {
+  const deleteKey = useCallback(
+    async (id: string): Promise<void> => {
+      const snapshot = keys;
+      setKeys((prev) => prev.filter((k) => k.id !== id));
+      try {
+        const res = await fetch(`/api/bedrock-keys/${id}`, {
+          method: 'DELETE',
+          headers: authHeaders(),
+        });
+        if (!res.ok) {
+          setKeys(snapshot);
+        }
+      } catch {
         setKeys(snapshot);
       }
-    } catch {
-      setKeys(snapshot);
-    }
-  }, [authHeaders, keys]);
+    },
+    [authHeaders, keys],
+  );
 
   return { keys, isLoading, error, fetchKeys, createKey, deleteKey };
 }

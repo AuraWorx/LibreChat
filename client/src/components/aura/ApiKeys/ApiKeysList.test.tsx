@@ -3,8 +3,14 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import ApiKeysList from './ApiKeysList';
 
 jest.mock('@librechat/client', () => ({
-  Button: ({ children, onClick, ...props }: React.PropsWithChildren<{ onClick?: () => void; [k: string]: unknown }>) => (
-    <button onClick={onClick} {...props}>{children}</button>
+  Button: ({
+    children,
+    onClick,
+    ...props
+  }: React.PropsWithChildren<{ onClick?: () => void; [k: string]: unknown }>) => (
+    <button onClick={onClick} {...props}>
+      {children}
+    </button>
   ),
 }));
 
@@ -58,10 +64,13 @@ describe('ApiKeysList', () => {
 
   it('does NOT render hash or full token in the DOM', () => {
     const key = { ...MOCK_KEY, hash: 'secret-hash', token: 'secret-token' };
-    const { container } = render(<ApiKeysList keys={[key as typeof MOCK_KEY]} onDeleteClick={noop} />);
+    const { container } = render(
+      <ApiKeysList keys={[key as typeof MOCK_KEY]} onDeleteClick={noop} />,
+    );
     expect(container.innerHTML).not.toContain('secret-hash');
     expect(container.innerHTML).not.toContain('secret-token');
   });
 });
 
+// eslint-disable-next-line jest/no-export
 export {};

@@ -16,7 +16,11 @@ const crypto = require('crypto');
 
 beforeAll(() => {
   // Simulate a connected mongoose instance so the 503 guard doesn't fire by default.
-  Object.defineProperty(mongoose.connection, 'readyState', { value: 1, writable: true, configurable: true });
+  Object.defineProperty(mongoose.connection, 'readyState', {
+    value: 1,
+    writable: true,
+    configurable: true,
+  });
 });
 
 afterEach(() => jest.clearAllMocks());
@@ -71,9 +75,17 @@ describe('validateBedrockKey', () => {
 
   it('throws 503 error when mongoose is not connected', async () => {
     const original = mongoose.connection.readyState;
-    Object.defineProperty(mongoose.connection, 'readyState', { value: 0, writable: true, configurable: true });
+    Object.defineProperty(mongoose.connection, 'readyState', {
+      value: 0,
+      writable: true,
+      configurable: true,
+    });
     await expect(validateBedrockKey('sometoken')).rejects.toMatchObject({ statusCode: 503 });
-    Object.defineProperty(mongoose.connection, 'readyState', { value: original, writable: true, configurable: true });
+    Object.defineProperty(mongoose.connection, 'readyState', {
+      value: original,
+      writable: true,
+      configurable: true,
+    });
   });
 });
 
@@ -83,9 +95,18 @@ describe('bedrockProxyAuth middleware', () => {
       statusCode: null,
       body: null,
       headers: {},
-      status(code) { this.statusCode = code; return this; },
-      json(payload) { this.body = payload; return this; },
-      set(k, v) { this.headers[k] = v; return this; },
+      status(code) {
+        this.statusCode = code;
+        return this;
+      },
+      json(payload) {
+        this.body = payload;
+        return this;
+      },
+      set(k, v) {
+        this.headers[k] = v;
+        return this;
+      },
     };
   }
 
@@ -97,7 +118,9 @@ describe('bedrockProxyAuth middleware', () => {
     expect(res.statusCode).toBe(401);
     expect(next).not.toHaveBeenCalled();
     expect(auditLogger.keyRejected).toHaveBeenCalledWith({
-      reason: 'missing_token', lastFour: null, requestId: 'req-1',
+      reason: 'missing_token',
+      lastFour: null,
+      requestId: 'req-1',
     });
   });
 
@@ -110,7 +133,9 @@ describe('bedrockProxyAuth middleware', () => {
     expect(res.statusCode).toBe(401);
     expect(next).not.toHaveBeenCalled();
     expect(auditLogger.keyRejected).toHaveBeenCalledWith({
-      reason: 'invalid_or_revoked', lastFour: 'mnop', requestId: 'req-2',
+      reason: 'invalid_or_revoked',
+      lastFour: 'mnop',
+      requestId: 'req-2',
     });
   });
 
@@ -141,7 +166,11 @@ describe('bedrockProxyAuth middleware', () => {
 
   it('returns 503 with Retry-After when mongoose not connected', async () => {
     const original = mongoose.connection.readyState;
-    Object.defineProperty(mongoose.connection, 'readyState', { value: 0, writable: true, configurable: true });
+    Object.defineProperty(mongoose.connection, 'readyState', {
+      value: 0,
+      writable: true,
+      configurable: true,
+    });
     const req = { headers: { authorization: 'Bearer goodtoken1234' }, requestId: 'req-5' };
     const res = mockRes();
     const next = jest.fn();
@@ -149,6 +178,10 @@ describe('bedrockProxyAuth middleware', () => {
     expect(res.statusCode).toBe(503);
     expect(res.headers['Retry-After']).toBe('5');
     expect(next).not.toHaveBeenCalled();
-    Object.defineProperty(mongoose.connection, 'readyState', { value: original, writable: true, configurable: true });
+    Object.defineProperty(mongoose.connection, 'readyState', {
+      value: original,
+      writable: true,
+      configurable: true,
+    });
   });
 });
