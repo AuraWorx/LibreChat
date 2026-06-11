@@ -23,19 +23,29 @@ const BEDROCK_BODY_FIELDS = new Set([
 // Passing it for Sonnet/Haiku causes "invalid beta flag" ValidationException.
 const BEDROCK_VALID_BETAS = new Set(['extended-output-2025-06-30']);
 
+function getRegionPrefix() {
+  const region = process.env.AWS_REGION || 'us-east-1';
+  if (region.startsWith('eu-')) return 'eu';
+  if (region.startsWith('ap-')) return 'ap';
+  return 'us';
+}
+
 function translateModelId(modelId) {
   if (!modelId) throw new Error('model is required');
-  // Pass through fully-qualified Bedrock model IDs and cross-region inference profiles unchanged
+  // Already a cross-region inference profile or global profile — pass through unchanged
   if (
-    modelId.startsWith('anthropic.') ||
     modelId.startsWith('us.') ||
-    modelId.startsWith('global.') ||
     modelId.startsWith('eu.') ||
-    modelId.startsWith('ap.')
+    modelId.startsWith('ap.') ||
+    modelId.startsWith('global.')
   ) {
     return modelId;
   }
-  return `anthropic.${modelId}`;
+  // Strip bare 'anthropic.' prefix if present, then build the regional cross-region inference
+  // profile ID that Bedrock requires for on-demand throughput (e.g. us.anthropic.claude-opus-4-8)
+  const prefix = getRegionPrefix();
+  const bare = modelId.startsWith('anthropic.') ? modelId.slice('anthropic.'.length) : modelId;
+  return `${prefix}.anthropic.${bare}`;
 }
 
 // Extract system-role messages from the messages array and promote them to the

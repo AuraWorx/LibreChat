@@ -40,6 +40,16 @@ const ERROR_MAP = {
     message: 'Model not ready, retry shortly',
   },
   ResourceNotFoundException: { status: 404, error: 'not_found_error', message: 'Model not found' },
+  // Stream-level errors embedded in the Bedrock response stream
+  ModelStreamErrorException: { status: 500, error: 'api_error', message: 'Bedrock stream error' },
+  InternalServerException: { status: 500, error: 'api_error', message: 'Bedrock internal error' },
+  ModelTimeoutException: {
+    status: 503,
+    retryAfter: '5',
+    error: 'overloaded_error',
+    message: 'Model timed out, retry shortly',
+  },
+  EmptyStreamError: { status: 500, error: 'api_error', message: 'Bedrock returned empty stream' },
 };
 
 function mapError(err, res) {
