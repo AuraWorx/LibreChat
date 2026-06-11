@@ -267,6 +267,7 @@ async function handleMessages(req, res) {
     // Model allowlist check
     const modelError = checkAllowedModels(anthropicBody.model, bedrockKeyDoc);
     if (modelError) {
+      statusCode = 403;
       return res.status(403).json(modelError);
     }
 
@@ -274,10 +275,16 @@ async function handleMessages(req, res) {
     const limits = await getEffectiveLimits(bedrockKeyDoc);
     const dailyCheck = await checkDailyLimits(userId, limits);
     if (dailyCheck.exhausted) {
+      // Use 400 instead of 429 — the Anthropic SDK retries 429s automatically which causes
+      // Claude Code to loop indefinitely. 400 is non-retriable and surfaces as a clear error.
+      statusCode = 400;
       const { exhausted: _x, remainingOutputTokens: _r, ...errorFields } = dailyCheck;
-      return res.status(429).json({
-        error: 'daily_token_limit_exceeded',
-        message: 'Daily token budget exhausted. Resets at midnight UTC.',
+      return res.status(400).json({
+        type: 'error',
+        error: {
+          type: 'invalid_request_error',
+          message: 'Daily token budget exhausted. Resets at midnight UTC.',
+        },
         ...errorFields,
       });
     }
