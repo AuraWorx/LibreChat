@@ -1,7 +1,7 @@
 import React, { useState, useRef } from 'react';
 import * as Tabs from '@radix-ui/react-tabs';
 import { SettingsTabValues } from 'librechat-data-provider';
-import { MessageSquare, Command, DollarSign } from 'lucide-react';
+import { MessageSquare, Command, DollarSign, KeyRound } from 'lucide-react';
 import { Dialog, DialogPanel, DialogTitle, Transition, TransitionChild } from '@headlessui/react';
 import {
   GearIcon,
@@ -124,7 +124,7 @@ export default function Settings({ open, onOpenChange }: TDialogProps) {
     },
     {
       value: SettingsTabValues.API_KEYS,
-      icon: <span className="icon-sm">🔑</span>,
+      icon: <KeyRound className="icon-sm" aria-hidden="true" />,
       label: 'com_nav_setting_api_keys' as TranslationKeys,
     },
   ];
