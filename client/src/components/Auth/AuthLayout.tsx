@@ -57,7 +57,10 @@ function AuthLayout({
   };
 
   return (
-    <div className="relative flex min-h-screen flex-col bg-white dark:bg-gray-900">
+    <div
+      className="relative flex min-h-screen flex-col bg-white bg-cover bg-center bg-no-repeat dark:bg-gray-900"
+      style={{ backgroundImage: 'url(/assets/login-background.png)' }}
+    >
       <Banner />
       <BlinkAnimation active={isFetching}>
         <div className="mt-6 h-10 w-full bg-cover">
