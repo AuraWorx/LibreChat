@@ -188,8 +188,5 @@
       "admin/",
       "packages/"
     ]
-  },
-  "dependencies": {
-    "@aws-sdk/client-bedrock": "^3.1014.0"
   }
 }
