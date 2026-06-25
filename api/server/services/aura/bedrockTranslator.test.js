@@ -166,8 +166,18 @@ describe('translateModelId (dynamic cache)', () => {
       ['google.gemma-3-27b-it'], // canonical has no -v1:0
       [], // no cross-region profile for Gemma
     );
-    // user sends the version-suffixed form — should resolve to canonical bare ID
     expect(translateModelId('google.gemma-3-27b-it-v1:0')).toBe('google.gemma-3-27b-it');
+  });
+
+  it('resolves bare -v1 suffix (no colon) for models like anthropic.claude-opus-4-6-v1', () => {
+    _setTestCache(
+      ['anthropic.claude-opus-4-6-v1'],
+      ['us.anthropic.claude-opus-4-6-v1'],
+    );
+    // bare name resolves through anthropic. prepend + forward -v1 match
+    expect(translateModelId('claude-opus-4-6')).toBe('us.anthropic.claude-opus-4-6-v1');
+    // full provider-prefixed form also works
+    expect(translateModelId('anthropic.claude-opus-4-6')).toBe('us.anthropic.claude-opus-4-6-v1');
   });
 });
 
