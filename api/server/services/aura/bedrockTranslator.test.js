@@ -16,8 +16,12 @@ describe('translateModelId', () => {
     expect(translateModelId('amazon.nova-pro-v1:0')).toBe('us.amazon.nova-pro-v1:0');
   });
 
-  it('wraps deepseek models in the regional inference profile (bare deepseek.* is rejected by Bedrock)', () => {
+  it('wraps deepseek.r1-v1:0 in the regional inference profile (only r1 has a us.* profile)', () => {
     expect(translateModelId('deepseek.r1-v1:0')).toBe('us.deepseek.r1-v1:0');
+  });
+
+  it('keeps deepseek.v3-v1:0 bare — us.deepseek.v3-v1:0 is invalid on Bedrock', () => {
+    expect(translateModelId('deepseek.v3-v1:0')).toBe('deepseek.v3-v1:0');
   });
 
   it('wraps meta models in the regional inference profile', () => {
@@ -26,10 +30,15 @@ describe('translateModelId', () => {
     );
   });
 
-  it('wraps mistral models in the regional inference profile', () => {
+  it('wraps mistral.pixtral-large-2502-v1:0 in the regional inference profile (only pixtral has a us.* profile)', () => {
     expect(translateModelId('mistral.pixtral-large-2502-v1:0')).toBe(
       'us.mistral.pixtral-large-2502-v1:0',
     );
+  });
+
+  it('keeps other mistral models bare — us.mistral.ministral-* is invalid on Bedrock', () => {
+    expect(translateModelId('mistral.ministral-3-8b-instruct')).toBe('mistral.ministral-3-8b-instruct');
+    expect(translateModelId('mistral.mistral-large-3-675b-instruct')).toBe('mistral.mistral-large-3-675b-instruct');
   });
 
   it('keeps google.gemma-* bare — us.google.* is invalid on Bedrock', () => {
@@ -99,6 +108,15 @@ describe('getModelNativeFormat', () => {
   it('returns openai for us.mistral.* models', () => {
     expect(getModelNativeFormat('us.mistral.pixtral-large-2502-v1:0')).toBe('openai');
   });
+
+  it('returns meta for us.meta.* models', () => {
+    expect(getModelNativeFormat('us.meta.llama3-3-70b-instruct-v1:0')).toBe('meta');
+    expect(getModelNativeFormat('us.meta.llama4-scout-17b-16e-instruct-v1:0')).toBe('meta');
+  });
+
+  it('returns meta for bare meta.* models', () => {
+    expect(getModelNativeFormat('meta.llama3-3-70b-instruct-v1:0')).toBe('meta');
+  });
 });
 
 describe('normalizeResponse', () => {
@@ -127,6 +145,21 @@ describe('normalizeResponse', () => {
       usage: { prompt_tokens: 1, completion_tokens: 1 },
     };
     expect(normalizeResponse(resp, 'openai', 'zai.glm-5').stop_reason).toBe('max_tokens');
+  });
+
+  it('converts Meta Llama response to Anthropic format', () => {
+    const resp = {
+      generation: 'Hello there!',
+      stop_reason: 'stop',
+      prompt_token_count: 20,
+      generation_token_count: 5,
+    };
+    const normalized = normalizeResponse(resp, 'meta', 'us.meta.llama3-3-70b-instruct-v1:0');
+    expect(normalized.type).toBe('message');
+    expect(normalized.role).toBe('assistant');
+    expect(normalized.content).toEqual([{ type: 'text', text: 'Hello there!' }]);
+    expect(normalized.stop_reason).toBe('end_turn');
+    expect(normalized.usage).toEqual({ input_tokens: 20, output_tokens: 5 });
   });
 
   it('converts Nova response to Anthropic format', () => {
@@ -274,6 +307,40 @@ describe('translateRequestBody', () => {
     const input = { model: 'google.gemma-3-27b-it', messages: [{ role: 'user', content: 'hi' }], max_tokens: 8000 };
     const { body } = translateRequestBody(input, undefined, { maxOutputTokensPerRequest: 2000 });
     expect(body.max_tokens).toBe(2000);
+  });
+
+  // -- Meta Llama models --
+
+  it('produces Meta prompt body for meta.* models', () => {
+    const input = { model: 'meta.llama3-3-70b-instruct-v1:0', messages: [{ role: 'user', content: 'hello' }], max_tokens: 32 };
+    const { body, format, modelId } = translateRequestBody(input);
+    expect(format).toBe('meta');
+    expect(modelId).toBe('us.meta.llama3-3-70b-instruct-v1:0');
+    expect(body.prompt).toContain('<|begin_of_text|>');
+    expect(body.prompt).toContain('<|start_header_id|>user<|end_header_id|>');
+    expect(body.prompt).toContain('hello');
+    expect(body.prompt).toContain('<|start_header_id|>assistant<|end_header_id|>');
+    expect(body.max_gen_len).toBe(32);
+    expect(body.messages).toBeUndefined();
+    expect(body.anthropic_version).toBeUndefined();
+  });
+
+  it('includes system in Meta prompt when provided', () => {
+    const input = {
+      model: 'meta.llama3-3-70b-instruct-v1:0',
+      system: 'You are concise.',
+      messages: [{ role: 'user', content: 'hi' }],
+      max_tokens: 16,
+    };
+    const { body } = translateRequestBody(input);
+    expect(body.prompt).toContain('<|start_header_id|>system<|end_header_id|>');
+    expect(body.prompt).toContain('You are concise.');
+  });
+
+  it('caps max_gen_len for Meta models', () => {
+    const input = { model: 'meta.llama3-3-70b-instruct-v1:0', messages: [{ role: 'user', content: 'hi' }], max_tokens: 8000 };
+    const { body } = translateRequestBody(input, undefined, { maxOutputTokensPerRequest: 1000 });
+    expect(body.max_gen_len).toBe(1000);
   });
 
   // -- Nova models --

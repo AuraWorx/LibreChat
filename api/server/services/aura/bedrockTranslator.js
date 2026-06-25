@@ -26,10 +26,22 @@ const BEDROCK_VALID_BETAS = new Set(['extended-output-2025-06-30']);
 // Providers where the cross-region inference prefix (us./eu./ap.) is NOT supported —
 // these models must be invoked with their bare provider-prefixed ID.
 // Confirmed via live testing and Bedrock inference-profile enumeration (2026-06-25):
-//   google, zai       — confirmed bare-only via live test
-//   minimax           — confirmed bare-only via live test (us.minimax.* rejected)
-//   moonshot, moonshotai, nvidia, openai, qwen, luma — no us.* inference profiles exist
-const BARE_ONLY_PROVIDERS = new Set(['google', 'zai', 'minimax', 'moonshot', 'moonshotai', 'nvidia', 'openai', 'qwen', 'luma']);
+//   google, zai            — confirmed bare-only via live test
+//   minimax                — confirmed bare-only (us.minimax.* rejected)
+//   moonshot, moonshotai, nvidia, openai, qwen, luma — no us.* profiles exist
+//   mistral (most models)  — bare works; only pixtral-large has a us.* profile (see CROSS_REGION_MODEL_IDS)
+//   deepseek (most models) — bare works; only r1-v1:0 has a us.* profile (see CROSS_REGION_MODEL_IDS)
+const BARE_ONLY_PROVIDERS = new Set([
+  'google', 'zai', 'minimax', 'moonshot', 'moonshotai', 'nvidia', 'openai', 'qwen', 'luma',
+  'mistral', 'deepseek',
+]);
+
+// Specific model IDs that DO have confirmed cross-region inference profiles, even when their
+// provider is in BARE_ONLY_PROVIDERS. These take priority over the provider-level bare rule.
+const CROSS_REGION_MODEL_IDS = new Set([
+  'deepseek.r1-v1:0',               // us.deepseek.r1-v1:0 confirmed valid
+  'mistral.pixtral-large-2502-v1:0', // us.mistral.pixtral-large-2502-v1:0 confirmed valid
+]);
 
 function getRegionPrefix() {
   const region = process.env.AWS_REGION || 'us-east-1';
@@ -53,14 +65,15 @@ function translateModelId(modelId) {
   const dotIdx = modelId.indexOf('.');
   if (dotIdx > 0) {
     const provider = modelId.slice(0, dotIdx);
+    // Specific models that have confirmed cross-region profiles take priority over provider-level rules.
+    if (CROSS_REGION_MODEL_IDS.has(modelId)) {
+      return `${prefix}.${modelId}`;
+    }
     // These providers don't support cross-region inference profiles — use bare ID as-is.
-    // Confirmed: us.google.* and us.zai.* are rejected with "Invalid model identifier".
     if (BARE_ONLY_PROVIDERS.has(provider)) {
       return modelId;
     }
-    // All others (anthropic, amazon, meta, deepseek, mistral, writer, cohere, etc.) —
-    // wrap in a regional cross-region inference profile prefix. Any new provider that
-    // supports cross-region inference profiles will automatically work here.
+    // All others (anthropic, amazon, meta, writer, cohere, etc.) — wrap in a regional prefix.
     // Anthropic date-versioned models need -v1:0 suffix in the inference profile ID
     // (e.g. anthropic.claude-haiku-4-5-20251001 → us.anthropic.claude-haiku-4-5-20251001-v1:0).
     const bare = modelId.slice(dotIdx + 1);
@@ -79,11 +92,14 @@ function translateModelId(modelId) {
 // Detect which native request/response format a Bedrock model uses.
 // 'anthropic' — Bedrock Anthropic format (anthropic_version, array content [{text}])
 // 'nova'      — Amazon Nova format (messages w/ array content [{text}], inferenceConfig)
+// 'meta'      — Meta Llama format (prompt string with chat template tokens, max_gen_len)
+//               Used by: Meta Llama 3.x (us.meta.*, meta.*)
 // 'openai'    — OpenAI-compatible (messages w/ string content, max_tokens, choices response)
-//               Used by: Gemma (google.*), GLM (zai.*), DeepSeek (us.deepseek.*), Mistral, Writer
+//               Used by: Gemma (google.*), GLM (zai.*), DeepSeek, Mistral, Writer, MiniMax, Qwen
 function getModelNativeFormat(modelId) {
   if (modelId.includes('.anthropic.')) return 'anthropic';
   if (modelId.includes('.nova') || modelId.startsWith('amazon.nova')) return 'nova';
+  if (modelId.includes('.meta.') || modelId.startsWith('meta.')) return 'meta';
   return 'openai';
 }
 
@@ -142,6 +158,29 @@ function toOpenAICompatBody(anthropicBody, opts) {
   return body;
 }
 
+// Translate Anthropic body → Meta Llama prompt format.
+// Meta Llama 3.x on Bedrock uses a single `prompt` string with chat template tokens
+// and `max_gen_len` (not `max_tokens`). It rejects `messages` and `max_tokens`.
+function toMetaBody(anthropicBody, opts) {
+  const maxTokensCap = opts?.maxOutputTokensPerRequest ?? null;
+  const parts = [];
+  const sysText = extractSystemText(anthropicBody.system);
+  if (sysText) {
+    parts.push(`<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n${sysText}<|eot_id|>`);
+  } else {
+    parts.push('<|begin_of_text|>');
+  }
+  for (const msg of anthropicBody.messages || []) {
+    const text = extractContentText(msg.content);
+    parts.push(`<|start_header_id|>${msg.role}<|end_header_id|>\n\n${text}<|eot_id|>`);
+  }
+  parts.push('<|start_header_id|>assistant<|end_header_id|>\n\n');
+  const body = { prompt: parts.join(''), max_gen_len: maxTokensCap ?? anthropicBody.max_tokens ?? 512 };
+  if (anthropicBody.temperature != null) body.temperature = anthropicBody.temperature;
+  if (anthropicBody.top_p != null) body.top_p = anthropicBody.top_p;
+  return body;
+}
+
 // Extract system-role messages from the messages array and promote them to the
 // top-level `system` field. Bedrock rejects { role: "system" } inside messages;
 // it must be the top-level `system` parameter.
@@ -178,6 +217,21 @@ function normalizeResponse(nativeResponse, format, modelId) {
     };
   }
 
+  if (format === 'meta') {
+    return {
+      id: `msg_meta_${nativeResponse.generation_token_count ?? 0}`,
+      type: 'message',
+      role: 'assistant',
+      model: modelId,
+      content: [{ type: 'text', text: nativeResponse.generation || '' }],
+      stop_reason: mapStopReason(nativeResponse.stop_reason),
+      usage: {
+        input_tokens: nativeResponse.prompt_token_count ?? 0,
+        output_tokens: nativeResponse.generation_token_count ?? 0,
+      },
+    };
+  }
+
   // openai: choices[0].message.content, usage.prompt_tokens / completion_tokens
   const choice = nativeResponse.choices?.[0];
   return {
@@ -206,6 +260,8 @@ function translateRequestBody(anthropicBody, anthropicBetaHeader, opts) {
 
   if (format === 'nova') {
     body = toNovaBody(anthropicBody, { maxOutputTokensPerRequest: maxOutputTokensCap });
+  } else if (format === 'meta') {
+    body = toMetaBody(anthropicBody, { maxOutputTokensPerRequest: maxOutputTokensCap });
   } else if (format === 'openai') {
     body = toOpenAICompatBody(anthropicBody, { maxOutputTokensPerRequest: maxOutputTokensCap });
   } else {
