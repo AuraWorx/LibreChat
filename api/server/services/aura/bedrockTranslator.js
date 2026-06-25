@@ -71,9 +71,11 @@ async function ensureModelCache() {
       allInferenceProfiles(),
     ]);
 
+    const summaries = modelsResp.modelSummaries || [];
     _modelCache = {
-      modelIds: new Set((modelsResp.modelSummaries || []).map((m) => m.modelId)),
+      modelIds: new Set(summaries.map((m) => m.modelId)),
       profileIds: new Set(profileIds),
+      modelSummaries: new Map(summaries.map((m) => [m.modelId, m])),
       expiry: Date.now() + 6 * 60 * 60 * 1000, // 6 hours
     };
   } catch (err) {
@@ -380,11 +382,50 @@ async function translateRequestBody(anthropicBody, anthropicBetaHeader, opts) {
   return { modelId, body, format };
 }
 
+// Returns Claude Code-compatible models (TEXT-in + TEXT-out + non-LEGACY).
+// Used by the /bedrock/models.json proxy route.
+async function getLiveModelList() {
+  await ensureModelCache();
+  if (!_modelCache) return null;
+
+  const prefix = getRegionPrefix();
+  const models = [];
+
+  for (const id of _modelCache.modelIds) {
+    const summary = _modelCache.modelSummaries && _modelCache.modelSummaries.get(id);
+    const inputMods = summary ? (summary.inputModalities || []) : ['TEXT'];
+    const outputMods = summary ? (summary.outputModalities || []) : ['TEXT'];
+    const lifecycle = summary ? (summary.modelLifecycle && summary.modelLifecycle.status) : 'ACTIVE';
+
+    if (!inputMods.includes('TEXT') || !outputMods.includes('TEXT') || lifecycle === 'LEGACY') {
+      continue;
+    }
+
+    const bare = id.replace(/^(us|eu|ap)\./, '');
+    const provider = (summary && summary.providerName) || bare.split('.')[0] || 'unknown';
+    const name = (summary && summary.modelName) || id;
+    const hasProfile = _modelCache.profileIds.has(`${prefix}.${id}`);
+
+    models.push({
+      id,
+      name,
+      provider,
+      inputModalities: inputMods,
+      outputModalities: outputMods,
+      recommendedId: hasProfile ? `${prefix}.${id}` : id,
+    });
+  }
+
+  models.sort((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
+  return models;
+}
+
 module.exports = {
   translateModelId,
   translateRequestBody,
   getModelNativeFormat,
   normalizeResponse,
+  getLiveModelList,
   _setTestCache,
   _clearTestCache,
 };
