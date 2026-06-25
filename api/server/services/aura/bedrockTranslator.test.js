@@ -160,6 +160,15 @@ describe('translateModelId (dynamic cache)', () => {
     _setTestCache(['anthropic.claude-sonnet-4-6'], ['us.anthropic.claude-sonnet-4-6']);
     expect(translateModelId('us.anthropic.claude-sonnet-4-6')).toBe('us.anthropic.claude-sonnet-4-6');
   });
+
+  it('strips -v1:0 suffix to resolve canonical ID when model omits it (e.g. google.gemma-3-27b-it)', () => {
+    _setTestCache(
+      ['google.gemma-3-27b-it'], // canonical has no -v1:0
+      [], // no cross-region profile for Gemma
+    );
+    // user sends the version-suffixed form — should resolve to canonical bare ID
+    expect(translateModelId('google.gemma-3-27b-it-v1:0')).toBe('google.gemma-3-27b-it');
+  });
 });
 
 describe('getModelNativeFormat', () => {

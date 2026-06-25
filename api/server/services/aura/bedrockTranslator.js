@@ -96,9 +96,13 @@ function _clearTestCache() {
 function resolveCanonicalModelId(input) {
   if (!_modelCache) return input;
   if (_modelCache.modelIds.has(input)) return input;
+  // Forward: input is abbreviated, model ID has version suffix (e.g. meta.llama4 → meta.llama4-v1:0)
   for (const id of _modelCache.modelIds) {
     if (id.startsWith(input) && /^-v\d+:\d+$/.test(id.slice(input.length))) return id;
   }
+  // Reverse: input has a version suffix the canonical ID omits (e.g. google.gemma-3-27b-it-v1:0 → google.gemma-3-27b-it)
+  const stripped = input.replace(/-v\d+:\d+$/, '');
+  if (stripped !== input && _modelCache.modelIds.has(stripped)) return stripped;
   return input; // no match — pass through as-is
 }
 
