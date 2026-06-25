@@ -18,9 +18,34 @@ export default function SetupInstructions() {
         {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
       </button>
       {open && (
-        <div className="border-t border-border-light px-4 py-3 font-mono text-xs text-text-secondary">
-          <p>export ANTHROPIC_BASE_URL={baseUrl}</p>
-          <p>export ANTHROPIC_AUTH_TOKEN=&lt;your-key&gt;</p>
+        <div className="border-t border-border-light px-4 py-3 space-y-4 text-xs text-text-secondary">
+
+          {/* Environment variables */}
+          <div className="space-y-1">
+            <p className="font-medium text-text-primary">Environment</p>
+            <div className="font-mono space-y-0.5">
+              <p>export ANTHROPIC_BASE_URL={baseUrl}</p>
+              <p>export ANTHROPIC_API_KEY=&lt;your-key&gt;</p>
+            </div>
+          </div>
+
+          {/* Claude Code */}
+          <div className="space-y-1">
+            <p className="font-medium text-text-primary">Claude Code</p>
+            <p className="font-mono">claude --model us.anthropic.claude-sonnet-4-6</p>
+          </div>
+
+          {/* SDK / direct API */}
+          <div className="space-y-1">
+            <p className="font-medium text-text-primary">SDK / direct API</p>
+            <div className="font-mono space-y-0.5">
+              <p>{'# Python'}</p>
+              <p>{'client = Anthropic()  # picks up env vars'}</p>
+              <p>{'# TypeScript'}</p>
+              <p>{'const client = new Anthropic();'}</p>
+            </div>
+          </div>
+
         </div>
       )}
     </div>

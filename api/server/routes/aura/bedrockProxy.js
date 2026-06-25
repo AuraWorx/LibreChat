@@ -7,7 +7,6 @@ const {
   handleMessages,
   handleCountTokens,
 } = require('../../controllers/aura/bedrockProxyController');
-
 const router = express.Router();
 
 const ipLimiter = createIpRateLimiter();

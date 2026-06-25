@@ -59,7 +59,7 @@ export default function TokenRevealModal({ token, keyName, onClose }: TokenRevea
   const baseUrl = `https://${window.location.hostname}/bedrock`;
 
   const handleCopyExport = async () => {
-    const exportText = `export ANTHROPIC_BASE_URL=${baseUrl}\nexport ANTHROPIC_AUTH_TOKEN=${token}`;
+    const exportText = `export ANTHROPIC_BASE_URL=${baseUrl}\nexport ANTHROPIC_API_KEY=${token}`;
     const ok = await copyToClipboard(exportText);
     if (ok) {
       setExportCopied(true);
@@ -89,7 +89,7 @@ export default function TokenRevealModal({ token, keyName, onClose }: TokenRevea
       )}
       <div className="rounded border border-border-light bg-surface-secondary p-3 font-mono text-xs text-text-secondary">
         <p className="select-all">export ANTHROPIC_BASE_URL={baseUrl}</p>
-        <p className="select-all">export ANTHROPIC_AUTH_TOKEN={token}</p>
+        <p className="select-all">export ANTHROPIC_API_KEY={token}</p>
       </div>
       <div className="flex justify-end gap-2">
         <Button variant="outline" onClick={handleCopyExport} aria-label={exportCopied ? 'Copied!' : 'Copy export commands'}>
