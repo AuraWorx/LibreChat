@@ -43,6 +43,11 @@ const CROSS_REGION_MODEL_IDS = new Set([
   'mistral.pixtral-large-2502-v1:0', // us.mistral.pixtral-large-2502-v1:0 confirmed valid
 ]);
 
+// Providers where every model ID requires a -v1:0 version suffix on Bedrock.
+// Users can omit the suffix (e.g. 'meta.llama4-maverick-17b-instruct') and the
+// translator appends it automatically.
+const VERSION_SUFFIX_PROVIDERS = new Set(['meta', 'deepseek']);
+
 function getRegionPrefix() {
   const region = process.env.AWS_REGION || 'us-east-1';
   if (region.startsWith('eu-')) return 'eu';
@@ -65,6 +70,12 @@ function translateModelId(modelId) {
   const dotIdx = modelId.indexOf('.');
   if (dotIdx > 0) {
     const provider = modelId.slice(0, dotIdx);
+    // Auto-append -v1:0 for providers where all models require a version suffix.
+    // Allows callers to use bare names like 'meta.llama4-maverick-17b-instruct'
+    // or 'deepseek.r1' without specifying the version.
+    if (VERSION_SUFFIX_PROVIDERS.has(provider) && !/[-]v\d+:\d+$/.test(modelId)) {
+      modelId = `${modelId}-v1:0`;
+    }
     // Specific models that have confirmed cross-region profiles take priority over provider-level rules.
     if (CROSS_REGION_MODEL_IDS.has(modelId)) {
       return `${prefix}.${modelId}`;

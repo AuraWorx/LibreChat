@@ -20,12 +20,32 @@ describe('translateModelId', () => {
     expect(translateModelId('deepseek.r1-v1:0')).toBe('us.deepseek.r1-v1:0');
   });
 
+  it('auto-appends -v1:0 for deepseek.r1 shorthand', () => {
+    expect(translateModelId('deepseek.r1')).toBe('us.deepseek.r1-v1:0');
+  });
+
   it('keeps deepseek.v3-v1:0 bare — us.deepseek.v3-v1:0 is invalid on Bedrock', () => {
     expect(translateModelId('deepseek.v3-v1:0')).toBe('deepseek.v3-v1:0');
   });
 
+  it('auto-appends -v1:0 for deepseek.v3 shorthand and keeps it bare', () => {
+    expect(translateModelId('deepseek.v3')).toBe('deepseek.v3-v1:0');
+  });
+
   it('wraps meta models in the regional inference profile', () => {
     expect(translateModelId('meta.llama3-3-70b-instruct-v1:0')).toBe(
+      'us.meta.llama3-3-70b-instruct-v1:0',
+    );
+  });
+
+  it('auto-appends -v1:0 for meta model shorthands', () => {
+    expect(translateModelId('meta.llama4-maverick-17b-instruct')).toBe(
+      'us.meta.llama4-maverick-17b-instruct-v1:0',
+    );
+    expect(translateModelId('meta.llama4-scout-17b-instruct')).toBe(
+      'us.meta.llama4-scout-17b-instruct-v1:0',
+    );
+    expect(translateModelId('meta.llama3-3-70b-instruct')).toBe(
       'us.meta.llama3-3-70b-instruct-v1:0',
     );
   });
