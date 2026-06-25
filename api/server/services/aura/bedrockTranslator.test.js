@@ -1,8 +1,18 @@
 'use strict';
 
-const { translateModelId, translateRequestBody, getModelNativeFormat, normalizeResponse } = require('./bedrockTranslator');
+const {
+  translateModelId,
+  translateRequestBody,
+  getModelNativeFormat,
+  normalizeResponse,
+  _setTestCache,
+  _clearTestCache,
+} = require('./bedrockTranslator');
 
-describe('translateModelId', () => {
+// Clear the model cache before every test so static/dynamic paths don't bleed across tests.
+beforeEach(() => _clearTestCache());
+
+describe('translateModelId (static fallback — no cache)', () => {
   it('builds a regional cross-region inference profile for a bare Anthropic model name', () => {
     expect(translateModelId('claude-opus-4-7')).toBe('us.anthropic.claude-opus-4-7');
   });
@@ -14,6 +24,12 @@ describe('translateModelId', () => {
   it('wraps amazon.nova models in the regional inference profile', () => {
     expect(translateModelId('amazon.nova-lite-v1:0')).toBe('us.amazon.nova-lite-v1:0');
     expect(translateModelId('amazon.nova-pro-v1:0')).toBe('us.amazon.nova-pro-v1:0');
+  });
+
+  it('auto-appends -v1:0 for amazon nova shorthands', () => {
+    expect(translateModelId('amazon.nova-lite')).toBe('us.amazon.nova-lite-v1:0');
+    expect(translateModelId('amazon.nova-pro')).toBe('us.amazon.nova-pro-v1:0');
+    expect(translateModelId('amazon.nova-micro')).toBe('us.amazon.nova-micro-v1:0');
   });
 
   it('wraps deepseek.r1-v1:0 in the regional inference profile (only r1 has a us.* profile)', () => {
@@ -30,6 +46,10 @@ describe('translateModelId', () => {
 
   it('auto-appends -v1:0 for deepseek.v3 shorthand and keeps it bare', () => {
     expect(translateModelId('deepseek.v3')).toBe('deepseek.v3-v1:0');
+  });
+
+  it('does NOT append -v1:0 to deepseek.v3.2 — .N suffix means its own versioning', () => {
+    expect(translateModelId('deepseek.v3.2')).toBe('deepseek.v3.2');
   });
 
   it('wraps meta models in the regional inference profile', () => {
@@ -100,6 +120,45 @@ describe('translateModelId', () => {
     expect(() => translateModelId(undefined)).toThrow('model is required');
     expect(() => translateModelId('')).toThrow('model is required');
     expect(() => translateModelId(null)).toThrow('model is required');
+  });
+});
+
+describe('translateModelId (dynamic cache)', () => {
+  it('resolves shorthand to canonical model ID via prefix match', () => {
+    _setTestCache(
+      ['meta.llama4-maverick-17b-instruct-v1:0', 'us.meta.llama4-maverick-17b-instruct-v1:0'],
+      ['us.meta.llama4-maverick-17b-instruct-v1:0'],
+    );
+    expect(translateModelId('meta.llama4-maverick-17b-instruct')).toBe(
+      'us.meta.llama4-maverick-17b-instruct-v1:0',
+    );
+  });
+
+  it('returns bare canonical ID when no inference profile exists for model', () => {
+    _setTestCache(
+      ['deepseek.v3-v1:0'],
+      [], // no profile for deepseek.v3-v1:0
+    );
+    expect(translateModelId('deepseek.v3')).toBe('deepseek.v3-v1:0');
+  });
+
+  it('wraps model in regional prefix when inference profile found in cache', () => {
+    _setTestCache(
+      ['deepseek.r1-v1:0'],
+      ['us.deepseek.r1-v1:0'],
+    );
+    expect(translateModelId('deepseek.r1-v1:0')).toBe('us.deepseek.r1-v1:0');
+  });
+
+  it('passes through unknown model ID when not found in cache', () => {
+    _setTestCache(['anthropic.claude-sonnet-4-6'], ['us.anthropic.claude-sonnet-4-6']);
+    // unknown model not in cache — passes through unchanged
+    expect(translateModelId('unknown.model-xyz')).toBe('unknown.model-xyz');
+  });
+
+  it('still passes through already-prefixed regional IDs unchanged regardless of cache', () => {
+    _setTestCache(['anthropic.claude-sonnet-4-6'], ['us.anthropic.claude-sonnet-4-6']);
+    expect(translateModelId('us.anthropic.claude-sonnet-4-6')).toBe('us.anthropic.claude-sonnet-4-6');
   });
 });
 
@@ -203,79 +262,79 @@ describe('translateRequestBody', () => {
     max_tokens: 100,
   };
 
-  it('always injects anthropic_version: bedrock-2023-05-31 for Anthropic models', () => {
-    const { body } = translateRequestBody(baseBody);
+  it('always injects anthropic_version: bedrock-2023-05-31 for Anthropic models', async () => {
+    const { body } = await translateRequestBody(baseBody);
     expect(body.anthropic_version).toBe('bedrock-2023-05-31');
   });
 
-  it('strips model from body and returns it as modelId with regional prefix', () => {
-    const { body, modelId } = translateRequestBody(baseBody);
+  it('strips model from body and returns it as modelId with regional prefix', async () => {
+    const { body, modelId } = await translateRequestBody(baseBody);
     expect(body.model).toBeUndefined();
     expect(modelId).toBe('us.anthropic.claude-sonnet-4-6');
   });
 
-  it('returns format=anthropic for Anthropic models', () => {
-    const { format } = translateRequestBody(baseBody);
+  it('returns format=anthropic for Anthropic models', async () => {
+    const { format } = await translateRequestBody(baseBody);
     expect(format).toBe('anthropic');
   });
 
-  it('passes messages through unchanged for Anthropic', () => {
-    const { body } = translateRequestBody(baseBody);
+  it('passes messages through unchanged for Anthropic', async () => {
+    const { body } = await translateRequestBody(baseBody);
     expect(body.messages).toEqual(baseBody.messages);
   });
 
-  it('passes system through unchanged for Anthropic', () => {
+  it('passes system through unchanged for Anthropic', async () => {
     const input = { ...baseBody, system: 'You are helpful.' };
-    const { body } = translateRequestBody(input);
+    const { body } = await translateRequestBody(input);
     expect(body.system).toBe('You are helpful.');
   });
 
-  it('drops stream — not in Bedrock allowlist', () => {
+  it('drops stream — not in Bedrock allowlist', async () => {
     const input = { ...baseBody, stream: true };
-    const { body } = translateRequestBody(input);
+    const { body } = await translateRequestBody(input);
     expect(body.stream).toBeUndefined();
   });
 
-  it('drops context_management — Claude Code CLI field not accepted by Bedrock', () => {
+  it('drops context_management — Claude Code CLI field not accepted by Bedrock', async () => {
     const input = { ...baseBody, context_management: { enabled: true } };
-    const { body } = translateRequestBody(input);
+    const { body } = await translateRequestBody(input);
     expect(body.context_management).toBeUndefined();
   });
 
-  it('drops thinking — not in Bedrock allowlist', () => {
+  it('drops thinking — not in Bedrock allowlist', async () => {
     const input = { ...baseBody, thinking: { type: 'adaptive' } };
-    const { body } = translateRequestBody(input);
+    const { body } = await translateRequestBody(input);
     expect(body.thinking).toBeUndefined();
   });
 
-  it('drops metadata', () => {
+  it('drops metadata', async () => {
     const input = { ...baseBody, metadata: { user_id: 'u1' } };
-    const { body } = translateRequestBody(input);
+    const { body } = await translateRequestBody(input);
     expect(body.metadata).toBeUndefined();
   });
 
-  it('passes Bedrock-valid betas through and drops interleaved-thinking', () => {
-    const { body } = translateRequestBody(
+  it('passes Bedrock-valid betas through and drops interleaved-thinking', async () => {
+    const { body } = await translateRequestBody(
       baseBody,
       'interleaved-thinking-2025-05-14,extended-output-2025-06-30',
     );
     expect(body.anthropic_beta).toEqual(['extended-output-2025-06-30']);
   });
 
-  it('filters out client-tool betas that Bedrock does not recognise', () => {
-    const { body } = translateRequestBody(baseBody, 'claude-code-2025-03-07');
+  it('filters out client-tool betas that Bedrock does not recognise', async () => {
+    const { body } = await translateRequestBody(baseBody, 'claude-code-2025-03-07');
     expect(body.anthropic_beta).toBeUndefined();
   });
 
-  it('caps max_tokens to maxOutputTokensPerRequest when the request exceeds it', () => {
-    const { body } = translateRequestBody({ ...baseBody, max_tokens: 8000 }, undefined, {
+  it('caps max_tokens to maxOutputTokensPerRequest when the request exceeds it', async () => {
+    const { body } = await translateRequestBody({ ...baseBody, max_tokens: 8000 }, undefined, {
       maxOutputTokensPerRequest: 4000,
     });
     expect(body.max_tokens).toBe(4000);
   });
 
-  it('leaves max_tokens untouched when below the cap', () => {
-    const { body } = translateRequestBody({ ...baseBody, max_tokens: 1000 }, undefined, {
+  it('leaves max_tokens untouched when below the cap', async () => {
+    const { body } = await translateRequestBody({ ...baseBody, max_tokens: 1000 }, undefined, {
       maxOutputTokensPerRequest: 4000,
     });
     expect(body.max_tokens).toBe(1000);
@@ -283,9 +342,9 @@ describe('translateRequestBody', () => {
 
   // -- OpenAI-compat models (Gemma, GLM, DeepSeek, Mistral) --
 
-  it('produces OpenAI-compat body for google.gemma-* models', () => {
+  it('produces OpenAI-compat body for google.gemma-* models', async () => {
     const input = { model: 'google.gemma-3-27b-it', messages: [{ role: 'user', content: 'hello' }], max_tokens: 50 };
-    const { body, format, modelId } = translateRequestBody(input);
+    const { body, format, modelId } = await translateRequestBody(input);
     expect(format).toBe('openai');
     expect(modelId).toBe('google.gemma-3-27b-it');
     expect(body.messages).toEqual([{ role: 'user', content: 'hello' }]);
@@ -293,47 +352,47 @@ describe('translateRequestBody', () => {
     expect(body.anthropic_version).toBeUndefined();
   });
 
-  it('produces OpenAI-compat body for zai.glm-* models', () => {
+  it('produces OpenAI-compat body for zai.glm-* models', async () => {
     const input = { model: 'zai.glm-5', messages: [{ role: 'user', content: 'hello' }], max_tokens: 50 };
-    const { body, format } = translateRequestBody(input);
+    const { body, format } = await translateRequestBody(input);
     expect(format).toBe('openai');
     expect(body.messages).toEqual([{ role: 'user', content: 'hello' }]);
     expect(body.anthropic_version).toBeUndefined();
   });
 
-  it('converts array message content to string for OpenAI-compat models', () => {
+  it('converts array message content to string for OpenAI-compat models', async () => {
     const input = {
       model: 'google.gemma-3-27b-it',
       messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
       max_tokens: 10,
     };
-    const { body } = translateRequestBody(input);
+    const { body } = await translateRequestBody(input);
     expect(body.messages[0].content).toBe('hello');
   });
 
-  it('promotes system prompt to system message for OpenAI-compat models', () => {
+  it('promotes system prompt to system message for OpenAI-compat models', async () => {
     const input = {
       model: 'zai.glm-5',
       system: 'Be helpful.',
       messages: [{ role: 'user', content: 'hi' }],
       max_tokens: 10,
     };
-    const { body } = translateRequestBody(input);
+    const { body } = await translateRequestBody(input);
     expect(body.messages[0]).toEqual({ role: 'system', content: 'Be helpful.' });
     expect(body.messages[1]).toEqual({ role: 'user', content: 'hi' });
   });
 
-  it('caps max_tokens for OpenAI-compat models', () => {
+  it('caps max_tokens for OpenAI-compat models', async () => {
     const input = { model: 'google.gemma-3-27b-it', messages: [{ role: 'user', content: 'hi' }], max_tokens: 8000 };
-    const { body } = translateRequestBody(input, undefined, { maxOutputTokensPerRequest: 2000 });
+    const { body } = await translateRequestBody(input, undefined, { maxOutputTokensPerRequest: 2000 });
     expect(body.max_tokens).toBe(2000);
   });
 
   // -- Meta Llama models --
 
-  it('produces Meta prompt body for meta.* models', () => {
+  it('produces Meta prompt body for meta.* models', async () => {
     const input = { model: 'meta.llama3-3-70b-instruct-v1:0', messages: [{ role: 'user', content: 'hello' }], max_tokens: 32 };
-    const { body, format, modelId } = translateRequestBody(input);
+    const { body, format, modelId } = await translateRequestBody(input);
     expect(format).toBe('meta');
     expect(modelId).toBe('us.meta.llama3-3-70b-instruct-v1:0');
     expect(body.prompt).toContain('<|begin_of_text|>');
@@ -345,29 +404,29 @@ describe('translateRequestBody', () => {
     expect(body.anthropic_version).toBeUndefined();
   });
 
-  it('includes system in Meta prompt when provided', () => {
+  it('includes system in Meta prompt when provided', async () => {
     const input = {
       model: 'meta.llama3-3-70b-instruct-v1:0',
       system: 'You are concise.',
       messages: [{ role: 'user', content: 'hi' }],
       max_tokens: 16,
     };
-    const { body } = translateRequestBody(input);
+    const { body } = await translateRequestBody(input);
     expect(body.prompt).toContain('<|start_header_id|>system<|end_header_id|>');
     expect(body.prompt).toContain('You are concise.');
   });
 
-  it('caps max_gen_len for Meta models', () => {
+  it('caps max_gen_len for Meta models', async () => {
     const input = { model: 'meta.llama3-3-70b-instruct-v1:0', messages: [{ role: 'user', content: 'hi' }], max_tokens: 8000 };
-    const { body } = translateRequestBody(input, undefined, { maxOutputTokensPerRequest: 1000 });
+    const { body } = await translateRequestBody(input, undefined, { maxOutputTokensPerRequest: 1000 });
     expect(body.max_gen_len).toBe(1000);
   });
 
   // -- Nova models --
 
-  it('produces Nova body for amazon.nova-* models', () => {
+  it('produces Nova body for amazon.nova-* models', async () => {
     const input = { model: 'amazon.nova-lite-v1:0', messages: [{ role: 'user', content: 'hello' }], max_tokens: 50 };
-    const { body, format, modelId } = translateRequestBody(input);
+    const { body, format, modelId } = await translateRequestBody(input);
     expect(format).toBe('nova');
     expect(modelId).toBe('us.amazon.nova-lite-v1:0');
     expect(body.messages[0]).toEqual({ role: 'user', content: [{ text: 'hello' }] });
@@ -375,14 +434,43 @@ describe('translateRequestBody', () => {
     expect(body.anthropic_version).toBeUndefined();
   });
 
-  it('promotes system to Nova system block', () => {
+  it('promotes system to Nova system block', async () => {
     const input = {
       model: 'amazon.nova-lite-v1:0',
       system: 'Be concise.',
       messages: [{ role: 'user', content: 'hi' }],
       max_tokens: 10,
     };
-    const { body } = translateRequestBody(input);
+    const { body } = await translateRequestBody(input);
     expect(body.system).toEqual([{ text: 'Be concise.' }]);
+  });
+
+  // -- Dynamic cache path --
+
+  it('uses cache to resolve shorthand and route via inference profile', async () => {
+    _setTestCache(
+      ['meta.llama4-maverick-17b-instruct-v1:0'],
+      ['us.meta.llama4-maverick-17b-instruct-v1:0'],
+    );
+    const input = {
+      model: 'meta.llama4-maverick-17b-instruct',
+      messages: [{ role: 'user', content: 'hi' }],
+      max_tokens: 16,
+    };
+    const { modelId, format } = await translateRequestBody(input);
+    expect(modelId).toBe('us.meta.llama4-maverick-17b-instruct-v1:0');
+    expect(format).toBe('meta');
+  });
+
+  it('uses cache to keep model bare when no inference profile found', async () => {
+    _setTestCache(['deepseek.v3-v1:0'], []);
+    const input = {
+      model: 'deepseek.v3',
+      messages: [{ role: 'user', content: 'hi' }],
+      max_tokens: 16,
+    };
+    const { modelId, format } = await translateRequestBody(input);
+    expect(modelId).toBe('deepseek.v3-v1:0');
+    expect(format).toBe('openai');
   });
 });

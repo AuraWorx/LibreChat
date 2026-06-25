@@ -284,7 +284,7 @@ async function handleMessages(req, res) {
       limits.maxOutputTokensPerRequest,
       dailyCheck.remainingOutputTokens,
     );
-    const { modelId, body, format } = translateRequestBody(anthropicBody, betaHeader, {
+    const { modelId, body, format } = await translateRequestBody(anthropicBody, betaHeader, {
       maxOutputTokensPerRequest: effectiveOutputCap,
     });
     const bodyBytes = Buffer.from(JSON.stringify(body));
@@ -352,7 +352,7 @@ async function handleCountTokens(req, res) {
   const limits = await getEffectiveLimits(bedrockKeyDoc);
 
   try {
-    const { modelId, body, format } = translateRequestBody(anthropicBody, betaHeader, {
+    const { modelId, body, format } = await translateRequestBody(anthropicBody, betaHeader, {
       maxOutputTokensPerRequest: limits.maxOutputTokensPerRequest,
     });
 

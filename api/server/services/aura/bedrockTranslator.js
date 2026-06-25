@@ -1,10 +1,6 @@
 'use strict';
 
 // Allowlist of fields Bedrock InvokeModel accepts in the Anthropic-format request body.
-// Using an allowlist (not a blocklist) means client-tool extras like
-// context_management, thinking, stream, metadata, cache_control, etc. are
-// silently dropped without needing per-field maintenance as the Anthropic
-// API evolves.
 const BEDROCK_BODY_FIELDS = new Set([
   'max_tokens',
   'messages',
@@ -18,35 +14,100 @@ const BEDROCK_BODY_FIELDS = new Set([
 ]);
 
 // Only beta flags that Bedrock's InvokeModel API recognises for Anthropic models.
-// interleaved-thinking-2025-05-14 is excluded: it is only valid on Opus 4.x
-// with extended thinking, and we strip the `thinking` body field entirely.
-// Passing it for Sonnet/Haiku causes "invalid beta flag" ValidationException.
 const BEDROCK_VALID_BETAS = new Set(['extended-output-2025-06-30']);
 
-// Providers where the cross-region inference prefix (us./eu./ap.) is NOT supported —
-// these models must be invoked with their bare provider-prefixed ID.
-// Confirmed via live testing and Bedrock inference-profile enumeration (2026-06-25):
-//   google, zai            — confirmed bare-only via live test
-//   minimax                — confirmed bare-only (us.minimax.* rejected)
-//   moonshot, moonshotai, nvidia, openai, qwen, luma — no us.* profiles exist
-//   mistral (most models)  — bare works; only pixtral-large has a us.* profile (see CROSS_REGION_MODEL_IDS)
-//   deepseek (most models) — bare works; only r1-v1:0 has a us.* profile (see CROSS_REGION_MODEL_IDS)
+// ─── Static fallback constants ─────────────────────────────────────────────────
+// Used only when the dynamic model cache hasn't loaded yet (startup or API failure).
+// Once the cache loads, ground-truth data from Bedrock's own APIs takes over.
+
 const BARE_ONLY_PROVIDERS = new Set([
   'google', 'zai', 'minimax', 'moonshot', 'moonshotai', 'nvidia', 'openai', 'qwen', 'luma',
   'mistral', 'deepseek',
 ]);
 
-// Specific model IDs that DO have confirmed cross-region inference profiles, even when their
-// provider is in BARE_ONLY_PROVIDERS. These take priority over the provider-level bare rule.
 const CROSS_REGION_MODEL_IDS = new Set([
-  'deepseek.r1-v1:0',               // us.deepseek.r1-v1:0 confirmed valid
-  'mistral.pixtral-large-2502-v1:0', // us.mistral.pixtral-large-2502-v1:0 confirmed valid
+  'deepseek.r1-v1:0',
+  'mistral.pixtral-large-2502-v1:0',
 ]);
 
-// Providers where every model ID requires a -v1:0 version suffix on Bedrock.
-// Users can omit the suffix (e.g. 'meta.llama4-maverick-17b-instruct') and the
-// translator appends it automatically.
-const VERSION_SUFFIX_PROVIDERS = new Set(['meta', 'deepseek']);
+// ─── Dynamic Model Cache ───────────────────────────────────────────────────────
+// On first translateRequestBody call, we fetch:
+//   - ListFoundationModels  → all Bedrock model IDs (for canonical name resolution)
+//   - ListInferenceProfiles → SYSTEM_DEFINED cross-region profiles (for us./eu./ap. routing)
+// Cached for 6 hours; on failure, static fallback above is used for that request.
+
+let _modelCache = null; // null = not loaded | { modelIds, profileIds, expiry }
+
+async function ensureModelCache() {
+  if (_modelCache && Date.now() < _modelCache.expiry) return;
+  try {
+    const {
+      BedrockClient,
+      ListFoundationModelsCommand,
+      ListInferenceProfilesCommand,
+    } = require('@aws-sdk/client-bedrock');
+    const region = process.env.AWS_REGION || 'us-east-1';
+    const client = new BedrockClient({ region });
+
+    // Paginate inference profiles (ListFoundationModels doesn't paginate)
+    async function allInferenceProfiles() {
+      const ids = [];
+      let nextToken;
+      do {
+        const resp = await client.send(
+          new ListInferenceProfilesCommand({
+            typeEquals: 'SYSTEM_DEFINED',
+            ...(nextToken && { nextToken }),
+          }),
+        );
+        for (const p of resp.inferenceProfileSummaries || []) ids.push(p.inferenceProfileId);
+        nextToken = resp.nextToken;
+      } while (nextToken);
+      return ids;
+    }
+
+    const [modelsResp, profileIds] = await Promise.all([
+      client.send(new ListFoundationModelsCommand({})),
+      allInferenceProfiles(),
+    ]);
+
+    _modelCache = {
+      modelIds: new Set((modelsResp.modelSummaries || []).map((m) => m.modelId)),
+      profileIds: new Set(profileIds),
+      expiry: Date.now() + 6 * 60 * 60 * 1000, // 6 hours
+    };
+  } catch (err) {
+    // Non-fatal: degrade to static fallback, retry next request.
+    console.warn('[bedrockTranslator] model cache load failed, using static fallback:', err.message);
+  }
+}
+
+// Injected by unit tests to avoid real AWS calls.
+function _setTestCache(modelIds, profileIds) {
+  _modelCache = { modelIds: new Set(modelIds), profileIds: new Set(profileIds), expiry: Infinity };
+}
+function _clearTestCache() {
+  _modelCache = null;
+}
+
+// Resolve a (possibly abbreviated) model name to its canonical Bedrock foundation model ID.
+// Handles version-suffix elision: 'meta.llama4-maverick-17b-instruct' resolves to
+// 'meta.llama4-maverick-17b-instruct-v1:0' because the suffix '-v1:0' matches -vN:N.
+function resolveCanonicalModelId(input) {
+  if (!_modelCache) return input;
+  if (_modelCache.modelIds.has(input)) return input;
+  for (const id of _modelCache.modelIds) {
+    if (id.startsWith(input) && /^-v\d+:\d+$/.test(id.slice(input.length))) return id;
+  }
+  return input; // no match — pass through as-is
+}
+
+// True if a SYSTEM_DEFINED cross-region inference profile exists for prefix.modelId.
+function hasSystemInferenceProfile(modelId, prefix) {
+  return !!_modelCache && _modelCache.profileIds.has(`${prefix}.${modelId}`);
+}
+
+// ─── Static fallback helpers ───────────────────────────────────────────────────
 
 function getRegionPrefix() {
   const region = process.env.AWS_REGION || 'us-east-1';
@@ -55,9 +116,42 @@ function getRegionPrefix() {
   return 'us';
 }
 
+function staticTranslateModelId(modelId, prefix) {
+  const dotIdx = modelId.indexOf('.');
+  if (dotIdx <= 0) {
+    // Bare name — assume Anthropic
+    const needsVersionSuffix = /\d{8}$/.test(modelId);
+    const canonicalId = needsVersionSuffix ? `${modelId}-v1:0` : modelId;
+    return `${prefix}.anthropic.${canonicalId}`;
+  }
+  const provider = modelId.slice(0, dotIdx);
+
+  // Version suffix normalization (handles common providers without touching mixed ones)
+  let normalized = modelId;
+  if (!/[-]v\d+:\d+$/.test(modelId)) {
+    if (provider === 'meta') {
+      normalized = `${modelId}-v1:0`;
+    } else if (provider === 'deepseek') {
+      const modelName = modelId.slice(dotIdx + 1);
+      if (!modelName.includes('.')) normalized = `${modelId}-v1:0`;
+    } else if (provider === 'amazon' && modelId.includes('nova')) {
+      normalized = `${modelId}-v1:0`;
+    }
+  }
+
+  if (CROSS_REGION_MODEL_IDS.has(normalized)) return `${prefix}.${normalized}`;
+  if (BARE_ONLY_PROVIDERS.has(provider)) return normalized;
+
+  const bare = normalized.slice(normalized.indexOf('.') + 1);
+  const needsSuffix = provider === 'anthropic' && /\d{8}$/.test(bare);
+  return `${prefix}.${needsSuffix ? `${normalized}-v1:0` : normalized}`;
+}
+
+// ─── Main translation ──────────────────────────────────────────────────────────
+
 function translateModelId(modelId) {
   if (!modelId) throw new Error('model is required');
-  // Already a cross-region inference profile or global profile — pass through unchanged.
+  // Already a full cross-region or global profile — pass through unchanged.
   if (
     modelId.startsWith('us.') ||
     modelId.startsWith('eu.') ||
@@ -66,53 +160,43 @@ function translateModelId(modelId) {
   ) {
     return modelId;
   }
+
   const prefix = getRegionPrefix();
-  const dotIdx = modelId.indexOf('.');
-  if (dotIdx > 0) {
-    const provider = modelId.slice(0, dotIdx);
-    // Auto-append -v1:0 for providers where all models require a version suffix.
-    // Allows callers to use bare names like 'meta.llama4-maverick-17b-instruct'
-    // or 'deepseek.r1' without specifying the version.
-    if (VERSION_SUFFIX_PROVIDERS.has(provider) && !/[-]v\d+:\d+$/.test(modelId)) {
-      modelId = `${modelId}-v1:0`;
+
+  if (_modelCache) {
+    // Dynamic path: resolve canonical model ID then check inference profile registry.
+    const dotIdx = modelId.indexOf('.');
+    if (dotIdx > 0) {
+      const canonical = resolveCanonicalModelId(modelId);
+      return hasSystemInferenceProfile(canonical, prefix)
+        ? `${prefix}.${canonical}`
+        : canonical;
     }
-    // Specific models that have confirmed cross-region profiles take priority over provider-level rules.
-    if (CROSS_REGION_MODEL_IDS.has(modelId)) {
-      return `${prefix}.${modelId}`;
-    }
-    // These providers don't support cross-region inference profiles — use bare ID as-is.
-    if (BARE_ONLY_PROVIDERS.has(provider)) {
-      return modelId;
-    }
-    // All others (anthropic, amazon, meta, writer, cohere, etc.) — wrap in a regional prefix.
-    // Anthropic date-versioned models need -v1:0 suffix in the inference profile ID
-    // (e.g. anthropic.claude-haiku-4-5-20251001 → us.anthropic.claude-haiku-4-5-20251001-v1:0).
-    const bare = modelId.slice(dotIdx + 1);
-    const needsSuffix = provider === 'anthropic' && /\d{8}$/.test(bare);
-    return `${prefix}.${needsSuffix ? `${modelId}-v1:0` : modelId}`;
+    // Bare name: prepend anthropic. and resolve via cache.
+    const canonical = resolveCanonicalModelId(`anthropic.${modelId}`);
+    return hasSystemInferenceProfile(canonical, prefix)
+      ? `${prefix}.${canonical}`
+      : `${prefix}.${canonical}`; // Anthropic always gets the prefix even without explicit profile
   }
-  // Bare model name with no provider prefix (e.g. 'claude-sonnet-4-6' from Claude Code) —
-  // assume Anthropic and build the full regional cross-region inference profile ID.
-  // Date-versioned models (e.g. claude-haiku-4-5-20251001) require a -v1:0 suffix in
-  // the inference profile ID. New-style models (claude-sonnet-4-6, claude-fable-5) don't.
-  const needsVersionSuffix = /\d{8}$/.test(modelId);
-  const canonicalId = needsVersionSuffix ? `${modelId}-v1:0` : modelId;
-  return `${prefix}.anthropic.${canonicalId}`;
+
+  // Static fallback: cache not yet loaded.
+  return staticTranslateModelId(modelId, prefix);
 }
 
-// Detect which native request/response format a Bedrock model uses.
+// ─── Format detection ──────────────────────────────────────────────────────────
+
 // 'anthropic' — Bedrock Anthropic format (anthropic_version, array content [{text}])
 // 'nova'      — Amazon Nova format (messages w/ array content [{text}], inferenceConfig)
 // 'meta'      — Meta Llama format (prompt string with chat template tokens, max_gen_len)
-//               Used by: Meta Llama 3.x (us.meta.*, meta.*)
 // 'openai'    — OpenAI-compatible (messages w/ string content, max_tokens, choices response)
-//               Used by: Gemma (google.*), GLM (zai.*), DeepSeek, Mistral, Writer, MiniMax, Qwen
 function getModelNativeFormat(modelId) {
   if (modelId.includes('.anthropic.')) return 'anthropic';
   if (modelId.includes('.nova') || modelId.startsWith('amazon.nova')) return 'nova';
   if (modelId.includes('.meta.') || modelId.startsWith('meta.')) return 'meta';
   return 'openai';
 }
+
+// ─── Body translators ──────────────────────────────────────────────────────────
 
 function mapStopReason(reason) {
   const MAP = { stop: 'end_turn', length: 'max_tokens', max_tokens: 'max_tokens', end_turn: 'end_turn' };
@@ -130,8 +214,6 @@ function extractContentText(content) {
   return (content || []).map((c) => c.text ?? '').join('');
 }
 
-// Translate Anthropic body → Amazon Nova format.
-// Nova uses messages with array content [{text}] and inferenceConfig.
 function toNovaBody(anthropicBody, opts) {
   const maxTokensCap = opts?.maxOutputTokensPerRequest ?? null;
   const messages = (anthropicBody.messages || []).map((msg) => ({
@@ -152,26 +234,6 @@ function toNovaBody(anthropicBody, opts) {
   return body;
 }
 
-// Translate Anthropic body → OpenAI-compatible format.
-// Used for Gemma (google.*), GLM (zai.*), DeepSeek (us.deepseek.*), Mistral (us.mistral.*), etc.
-function toOpenAICompatBody(anthropicBody, opts) {
-  const maxTokensCap = opts?.maxOutputTokensPerRequest ?? null;
-  const messages = [];
-  const sysText = extractSystemText(anthropicBody.system);
-  if (sysText) messages.push({ role: 'system', content: sysText });
-  for (const msg of anthropicBody.messages || []) {
-    messages.push({ role: msg.role, content: extractContentText(msg.content) });
-  }
-  const body = { messages, max_tokens: maxTokensCap ?? anthropicBody.max_tokens ?? 4096 };
-  if (anthropicBody.temperature != null) body.temperature = anthropicBody.temperature;
-  if (anthropicBody.top_p != null) body.top_p = anthropicBody.top_p;
-  if (anthropicBody.stop_sequences?.length) body.stop = anthropicBody.stop_sequences;
-  return body;
-}
-
-// Translate Anthropic body → Meta Llama prompt format.
-// Meta Llama 3.x on Bedrock uses a single `prompt` string with chat template tokens
-// and `max_gen_len` (not `max_tokens`). It rejects `messages` and `max_tokens`.
 function toMetaBody(anthropicBody, opts) {
   const maxTokensCap = opts?.maxOutputTokensPerRequest ?? null;
   const parts = [];
@@ -192,9 +254,21 @@ function toMetaBody(anthropicBody, opts) {
   return body;
 }
 
-// Extract system-role messages from the messages array and promote them to the
-// top-level `system` field. Bedrock rejects { role: "system" } inside messages;
-// it must be the top-level `system` parameter.
+function toOpenAICompatBody(anthropicBody, opts) {
+  const maxTokensCap = opts?.maxOutputTokensPerRequest ?? null;
+  const messages = [];
+  const sysText = extractSystemText(anthropicBody.system);
+  if (sysText) messages.push({ role: 'system', content: sysText });
+  for (const msg of anthropicBody.messages || []) {
+    messages.push({ role: msg.role, content: extractContentText(msg.content) });
+  }
+  const body = { messages, max_tokens: maxTokensCap ?? anthropicBody.max_tokens ?? 4096 };
+  if (anthropicBody.temperature != null) body.temperature = anthropicBody.temperature;
+  if (anthropicBody.top_p != null) body.top_p = anthropicBody.top_p;
+  if (anthropicBody.stop_sequences?.length) body.stop = anthropicBody.stop_sequences;
+  return body;
+}
+
 function extractSystemMessages(messages) {
   if (!Array.isArray(messages)) return { system: null, messages };
   const systemParts = [];
@@ -207,8 +281,8 @@ function extractSystemMessages(messages) {
   return { system: systemParts.length ? systemParts.join('\n\n') : null, messages: filtered };
 }
 
-// Convert a native Bedrock response back to Anthropic Messages API format so that
-// Claude Code (and other Anthropic-compatible clients) can read all model responses uniformly.
+// ─── Response normalizer ───────────────────────────────────────────────────────
+
 function normalizeResponse(nativeResponse, format, modelId) {
   if (format === 'anthropic') return nativeResponse;
 
@@ -243,7 +317,7 @@ function normalizeResponse(nativeResponse, format, modelId) {
     };
   }
 
-  // openai: choices[0].message.content, usage.prompt_tokens / completion_tokens
+  // openai
   const choice = nativeResponse.choices?.[0];
   return {
     id: nativeResponse.id || `msg_oai_${nativeResponse.usage?.completion_tokens ?? 0}`,
@@ -259,10 +333,11 @@ function normalizeResponse(nativeResponse, format, modelId) {
   };
 }
 
-// opts.maxOutputTokensPerRequest — admin-set ceiling on max_tokens per call.
-// Returns { modelId, body, format } where format is one of 'anthropic' | 'nova' | 'openai'.
-// The caller uses format to correctly interpret the response.
-function translateRequestBody(anthropicBody, anthropicBetaHeader, opts) {
+// ─── Main entry point ──────────────────────────────────────────────────────────
+
+async function translateRequestBody(anthropicBody, anthropicBetaHeader, opts) {
+  await ensureModelCache();
+
   const modelId = translateModelId(anthropicBody.model);
   const maxOutputTokensCap = opts?.maxOutputTokensPerRequest ?? null;
   const format = getModelNativeFormat(modelId);
@@ -276,20 +351,16 @@ function translateRequestBody(anthropicBody, anthropicBetaHeader, opts) {
   } else if (format === 'openai') {
     body = toOpenAICompatBody(anthropicBody, { maxOutputTokensPerRequest: maxOutputTokensCap });
   } else {
-    // Anthropic native format — existing translation logic.
+    // Anthropic native format
     body = { anthropic_version: 'bedrock-2023-05-31' };
     for (const [key, value] of Object.entries(anthropicBody)) {
-      if (BEDROCK_BODY_FIELDS.has(key)) {
-        body[key] = value;
-      }
+      if (BEDROCK_BODY_FIELDS.has(key)) body[key] = value;
     }
-    // Promote system-role messages to top-level system field.
     if (body.messages) {
       const { system, messages } = extractSystemMessages(body.messages);
       body.messages = messages;
       if (system && !body.system) body.system = system;
     }
-    // Apply admin-set ceiling on output tokens.
     if (maxOutputTokensCap && (!body.max_tokens || body.max_tokens > maxOutputTokensCap)) {
       body.max_tokens = maxOutputTokensCap;
     }
@@ -310,4 +381,6 @@ module.exports = {
   translateRequestBody,
   getModelNativeFormat,
   normalizeResponse,
+  _setTestCache,
+  _clearTestCache,
 };
