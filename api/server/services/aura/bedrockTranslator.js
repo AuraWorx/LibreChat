@@ -25,8 +25,11 @@ const BEDROCK_VALID_BETAS = new Set(['extended-output-2025-06-30']);
 
 // Providers where the cross-region inference prefix (us./eu./ap.) is NOT supported —
 // these models must be invoked with their bare provider-prefixed ID.
-// Confirmed via live testing: us.google.* and us.zai.* return "Invalid model identifier".
-const BARE_ONLY_PROVIDERS = new Set(['google', 'zai']);
+// Confirmed via live testing and Bedrock inference-profile enumeration (2026-06-25):
+//   google, zai       — confirmed bare-only via live test
+//   minimax           — confirmed bare-only via live test (us.minimax.* rejected)
+//   moonshot, moonshotai, nvidia, openai, qwen, luma — no us.* inference profiles exist
+const BARE_ONLY_PROVIDERS = new Set(['google', 'zai', 'minimax', 'moonshot', 'moonshotai', 'nvidia', 'openai', 'qwen', 'luma']);
 
 function getRegionPrefix() {
   const region = process.env.AWS_REGION || 'us-east-1';
@@ -58,11 +61,19 @@ function translateModelId(modelId) {
     // All others (anthropic, amazon, meta, deepseek, mistral, writer, cohere, etc.) —
     // wrap in a regional cross-region inference profile prefix. Any new provider that
     // supports cross-region inference profiles will automatically work here.
-    return `${prefix}.${modelId}`;
+    // Anthropic date-versioned models need -v1:0 suffix in the inference profile ID
+    // (e.g. anthropic.claude-haiku-4-5-20251001 → us.anthropic.claude-haiku-4-5-20251001-v1:0).
+    const bare = modelId.slice(dotIdx + 1);
+    const needsSuffix = provider === 'anthropic' && /\d{8}$/.test(bare);
+    return `${prefix}.${needsSuffix ? `${modelId}-v1:0` : modelId}`;
   }
   // Bare model name with no provider prefix (e.g. 'claude-sonnet-4-6' from Claude Code) —
   // assume Anthropic and build the full regional cross-region inference profile ID.
-  return `${prefix}.anthropic.${modelId}`;
+  // Date-versioned models (e.g. claude-haiku-4-5-20251001) require a -v1:0 suffix in
+  // the inference profile ID. New-style models (claude-sonnet-4-6, claude-fable-5) don't.
+  const needsVersionSuffix = /\d{8}$/.test(modelId);
+  const canonicalId = needsVersionSuffix ? `${modelId}-v1:0` : modelId;
+  return `${prefix}.anthropic.${canonicalId}`;
 }
 
 // Detect which native request/response format a Bedrock model uses.

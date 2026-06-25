@@ -34,6 +34,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
 export default function TokenRevealModal({ token, keyName, onClose }: TokenRevealModalProps) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
+  const [exportCopied, setExportCopied] = useState(false);
 
   // Block Escape key from dismissing
   useEffect(() => {
@@ -56,6 +57,15 @@ export default function TokenRevealModal({ token, keyName, onClose }: TokenRevea
   };
 
   const baseUrl = `https://${window.location.hostname}/bedrock`;
+
+  const handleCopyExport = async () => {
+    const exportText = `export ANTHROPIC_BASE_URL=${baseUrl}\nexport ANTHROPIC_AUTH_TOKEN=${token}`;
+    const ok = await copyToClipboard(exportText);
+    if (ok) {
+      setExportCopied(true);
+      setTimeout(() => setExportCopied(false), 2000);
+    }
+  };
 
   return (
     <div className={cn('flex flex-col gap-4 p-4')} role="dialog" aria-modal="true">
@@ -81,8 +91,11 @@ export default function TokenRevealModal({ token, keyName, onClose }: TokenRevea
         <p className="select-all">export ANTHROPIC_BASE_URL={baseUrl}</p>
         <p className="select-all">export ANTHROPIC_AUTH_TOKEN={token}</p>
       </div>
-      <div className="flex justify-end">
-        <Button onClick={onClose}>I copied it</Button>
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" onClick={handleCopyExport} aria-label={exportCopied ? 'Copied!' : 'Copy export commands'}>
+          {exportCopied ? 'Copied!' : 'Copy export commands'}
+        </Button>
+        <Button onClick={onClose}>Close</Button>
       </div>
     </div>
   );

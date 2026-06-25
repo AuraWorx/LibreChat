@@ -64,10 +64,10 @@ describe('TokenRevealModal', () => {
     jest.useRealTimers();
   });
 
-  it('"I copied it" button calls onClose', () => {
+  it('"Close" button calls onClose', () => {
     const onClose = jest.fn();
     render(<TokenRevealModal {...defaultProps} onClose={onClose} />);
-    fireEvent.click(screen.getByRole('button', { name: /i copied it/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close/i }));
     expect(onClose).toHaveBeenCalled();
   });
 
