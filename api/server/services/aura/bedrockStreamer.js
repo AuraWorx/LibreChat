@@ -117,6 +117,52 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
         continue;
       }
 
+      // Nova streaming: { messageStart/contentBlockDelta/contentBlockStop/messageStop/metadata }
+      if ('messageStart' in chunk || 'contentBlockDelta' in chunk || 'contentBlockStop' in chunk || 'messageStop' in chunk || ('metadata' in chunk && 'usage' in chunk.metadata)) {
+        if (chunk.messageStart && !contentStarted) {
+          writeEvent({
+            type: 'message_start',
+            message: {
+              id: `msg_nova_${modelId.slice(-6)}`,
+              type: 'message',
+              role: 'assistant',
+              model: modelId,
+              usage: { input_tokens: 0, output_tokens: 0 },
+            },
+          });
+          writeEvent({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+          contentStarted = true;
+        }
+        const deltaText = chunk.contentBlockDelta?.delta?.text;
+        if (deltaText) {
+          if (!contentStarted) {
+            writeEvent({
+              type: 'message_start',
+              message: { id: `msg_nova_${modelId.slice(-6)}`, type: 'message', role: 'assistant', model: modelId, usage: { input_tokens: 0, output_tokens: 0 } },
+            });
+            writeEvent({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+            contentStarted = true;
+          }
+          writeEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: deltaText } });
+        }
+        if (chunk.messageStop) {
+          const stopReason = chunk.messageStop.stopReason;
+          writeEvent({ type: 'content_block_stop', index: 0 });
+          writeEvent({
+            type: 'message_delta',
+            delta: { stop_reason: stopReasonMap[stopReason] ?? 'end_turn', stop_sequence: null },
+            usage: { output_tokens: usage.outputTokens },
+          });
+          writeEvent({ type: 'message_stop' });
+        }
+        if (chunk.metadata?.usage) {
+          const metrics = chunk['amazon-bedrock-invocationMetrics'];
+          usage.inputTokens = metrics?.inputTokenCount ?? chunk.metadata.usage.inputTokens ?? 0;
+          usage.outputTokens = metrics?.outputTokenCount ?? chunk.metadata.usage.outputTokens ?? 0;
+        }
+        continue;
+      }
+
       // OpenAI streaming: { choices: [{ delta: { content: "..." }, finish_reason: null }] }
       const choice = chunk.choices?.[0];
       if (!choice) continue;

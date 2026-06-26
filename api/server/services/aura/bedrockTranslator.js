@@ -98,9 +98,18 @@ function _clearTestCache() {
 function resolveCanonicalModelId(input) {
   if (!_modelCache) return input;
   if (_modelCache.modelIds.has(input)) return input;
+  // Strip context-window variant suffixes like :128k, :64k that Bedrock doesn't use in model IDs
+  const noCtx = input.replace(/:\d+k$/i, '');
+  if (noCtx !== input && _modelCache.modelIds.has(noCtx)) return noCtx;
   // Forward: input is abbreviated, model ID has version suffix (e.g. -v1:0 or bare -v1)
   for (const id of _modelCache.modelIds) {
     if (id.startsWith(input) && /^-v\d+(:\d+)?$/.test(id.slice(input.length))) return id;
+  }
+  // Also try forward match after stripping :Nk context suffix
+  if (noCtx !== input) {
+    for (const id of _modelCache.modelIds) {
+      if (id.startsWith(noCtx) && /^-v\d+(:\d+)?$/.test(id.slice(noCtx.length))) return id;
+    }
   }
   // Reverse: input has a version suffix the canonical ID omits (e.g. google.gemma-3-27b-it-v1:0 → google.gemma-3-27b-it)
   const stripped = input.replace(/-v\d+(:\d+)?$/, '');
@@ -401,10 +410,20 @@ async function getLiveModelList() {
       continue;
     }
 
+    // Exclude non-generative models (rerank, embedding) — they have TEXT I/O but don't do chat
+    if (/\brerank\b/i.test(id) || /\bembed\b/i.test(id)) continue;
+
     const bare = id.replace(/^(us|eu|ap)\./, '');
     const provider = (summary && summary.providerName) || bare.split('.')[0] || 'unknown';
     const name = (summary && summary.modelName) || id;
     const hasProfile = _modelCache.profileIds.has(`${prefix}.${id}`);
+
+    // Exclude models that require an inference profile but have none available in this account
+    const inferenceTypes = summary ? (summary.inferenceTypesSupported || []) : [];
+    const profileOnly = inferenceTypes.length > 0 &&
+      inferenceTypes.includes('INFERENCE_PROFILE') &&
+      !inferenceTypes.includes('ON_DEMAND');
+    if (profileOnly && !hasProfile) continue;
 
     models.push({
       id,
