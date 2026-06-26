@@ -83,6 +83,40 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
         continue;
       }
 
+      // Meta Llama streaming: { generation: "...", stop_reason: "stop"|null, ... }
+      if ('generation' in chunk) {
+        if (!contentStarted) {
+          writeEvent({
+            type: 'message_start',
+            message: {
+              id: `msg_${modelId.slice(-6)}`,
+              type: 'message',
+              role: 'assistant',
+              model: modelId,
+              usage: { input_tokens: chunk.prompt_token_count ?? 0, output_tokens: 0 },
+            },
+          });
+          writeEvent({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+          contentStarted = true;
+        }
+        if (chunk.generation) {
+          writeEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: chunk.generation } });
+        }
+        if (chunk.stop_reason) {
+          const metrics = chunk['amazon-bedrock-invocationMetrics'];
+          usage.inputTokens = metrics?.inputTokenCount ?? chunk.prompt_token_count ?? 0;
+          usage.outputTokens = metrics?.outputTokenCount ?? chunk.generation_token_count ?? 0;
+          writeEvent({ type: 'content_block_stop', index: 0 });
+          writeEvent({
+            type: 'message_delta',
+            delta: { stop_reason: stopReasonMap[chunk.stop_reason] ?? 'end_turn', stop_sequence: null },
+            usage: { output_tokens: usage.outputTokens },
+          });
+          writeEvent({ type: 'message_stop' });
+        }
+        continue;
+      }
+
       // OpenAI streaming: { choices: [{ delta: { content: "..." }, finish_reason: null }] }
       const choice = chunk.choices?.[0];
       if (!choice) continue;
