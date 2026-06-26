@@ -119,7 +119,7 @@ export default function SetupInstructions() {
           {/* Full setup guide link */}
           <div>
             <a
-              href="/setup"
+              href="/codesetup"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-xs font-medium text-blue-500 hover:text-blue-400 transition-colors"
