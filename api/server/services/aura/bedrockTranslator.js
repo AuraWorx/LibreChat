@@ -226,7 +226,9 @@ function extractContentText(content) {
 
 function toNovaBody(anthropicBody, opts) {
   const maxTokensCap = opts?.maxOutputTokensPerRequest ?? null;
-  const messages = (anthropicBody.messages || []).map((msg) => ({
+  // Nova rejects role:"system" inside messages — extract and merge into the top-level system field.
+  const { system: inlineSys, messages: filteredMsgs } = extractSystemMessages(anthropicBody.messages || []);
+  const messages = filteredMsgs.map((msg) => ({
     role: msg.role,
     content:
       typeof msg.content === 'string'
@@ -234,7 +236,8 @@ function toNovaBody(anthropicBody, opts) {
         : (msg.content || []).map((c) => ({ text: c.text ?? '' })).filter((c) => c.text),
   }));
   const body = { messages };
-  const sysText = extractSystemText(anthropicBody.system);
+  const topSys = extractSystemText(anthropicBody.system);
+  const sysText = [topSys, inlineSys].filter(Boolean).join('\n\n') || null;
   if (sysText) body.system = [{ text: sysText }];
   // Nova max output is 5 120 tokens regardless of what the client requests.
   // Clamp silently so Claude Code (which may request 64 k+) doesn't get a 400.
