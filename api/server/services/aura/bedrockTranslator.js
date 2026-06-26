@@ -97,24 +97,19 @@ function _clearTestCache() {
 // 'meta.llama4-maverick-17b-instruct-v1:0' because the suffix '-v1:0' matches -vN:N.
 function resolveCanonicalModelId(input) {
   if (!_modelCache) return input;
-  if (_modelCache.modelIds.has(input)) return input;
-  // Strip context-window variant suffixes like :128k, :64k that Bedrock doesn't use in model IDs
+  // Strip :128k/:64k context-window suffixes first — these appear in ListFoundationModels
+  // but Bedrock rejects them at invocation time (e.g. meta.llama3-1-8b-instruct-v1:0:128k)
   const noCtx = input.replace(/:\d+k$/i, '');
-  if (noCtx !== input && _modelCache.modelIds.has(noCtx)) return noCtx;
-  // Forward: input is abbreviated, model ID has version suffix (e.g. -v1:0 or bare -v1)
+  const base = noCtx !== input ? noCtx : input;
+  if (_modelCache.modelIds.has(base)) return base;
+  // Forward: base is abbreviated, model ID has version suffix (e.g. -v1:0 or bare -v1)
   for (const id of _modelCache.modelIds) {
-    if (id.startsWith(input) && /^-v\d+(:\d+)?$/.test(id.slice(input.length))) return id;
-  }
-  // Also try forward match after stripping :Nk context suffix
-  if (noCtx !== input) {
-    for (const id of _modelCache.modelIds) {
-      if (id.startsWith(noCtx) && /^-v\d+(:\d+)?$/.test(id.slice(noCtx.length))) return id;
-    }
+    if (id.startsWith(base) && /^-v\d+(:\d+)?$/.test(id.slice(base.length))) return id;
   }
   // Reverse: input has a version suffix the canonical ID omits (e.g. google.gemma-3-27b-it-v1:0 → google.gemma-3-27b-it)
-  const stripped = input.replace(/-v\d+(:\d+)?$/, '');
-  if (stripped !== input && _modelCache.modelIds.has(stripped)) return stripped;
-  return input; // no match — pass through as-is
+  const stripped = base.replace(/-v\d+(:\d+)?$/, '');
+  if (stripped !== base && _modelCache.modelIds.has(stripped)) return stripped;
+  return base; // no match — pass through as-is
 }
 
 // True if a SYSTEM_DEFINED cross-region inference profile exists for prefix.modelId.
@@ -241,7 +236,11 @@ function toNovaBody(anthropicBody, opts) {
   const body = { messages };
   const sysText = extractSystemText(anthropicBody.system);
   if (sysText) body.system = [{ text: sysText }];
-  const maxTokens = maxTokensCap ?? anthropicBody.max_tokens ?? 4096;
+  // Nova max output is 5 120 tokens regardless of what the client requests.
+  // Clamp silently so Claude Code (which may request 64 k+) doesn't get a 400.
+  const NOVA_MAX_OUTPUT = 5120;
+  const requested = maxTokensCap ?? anthropicBody.max_tokens ?? 4096;
+  const maxTokens = Math.min(requested, NOVA_MAX_OUTPUT);
   body.inferenceConfig = { maxTokens };
   if (anthropicBody.temperature != null) body.inferenceConfig.temperature = anthropicBody.temperature;
   if (anthropicBody.top_p != null) body.inferenceConfig.topP = anthropicBody.top_p;
@@ -412,6 +411,9 @@ async function getLiveModelList() {
 
     // Exclude non-generative models (rerank, embedding) — they have TEXT I/O but don't do chat
     if (/\brerank\b/i.test(id) || /\bembed\b/i.test(id)) continue;
+
+    // Exclude video-input models (e.g. TwelveLabs Pegasus) — not usable for text chat
+    if (inputMods.includes('VIDEO')) continue;
 
     const bare = id.replace(/^(us|eu|ap)\./, '');
     const provider = (summary && summary.providerName) || bare.split('.')[0] || 'unknown';
