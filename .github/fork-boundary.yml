@@ -58,6 +58,33 @@ allowed_modifications:
       Type-only addition — no runtime logic changes.
       Tracks: AuraWorx/librechat-suite#276
 
+  - path: api/package.json
+    reason: |
+      Adds @aws-sdk/client-bedrock (management SDK for ListFoundationModels /
+      ListInferenceProfiles used by the Bedrock proxy dynamic model list).
+      Removes unused @opentelemetry/* peer deps that were carried over from the
+      baseline lockfile fix. No script or logic changes.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: package.json
+    reason: |
+      Adds framer-motion, @react-spring/web, hookified as explicit root
+      devDependencies to stabilize the lockfile — these were hoisted from
+      workspace deps but missing from root, causing npm ci peer-dep failures.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: Dockerfile
+    reason: |
+      Adds --legacy-peer-deps to npm ci to match the lockfile that requires it.
+      Single line change in the builder stage.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: Dockerfile.multi
+    reason: |
+      Adds --legacy-peer-deps to npm ci to match the lockfile that requires it.
+      Single line change.
+      Tracks: AuraWorx/librechat-suite#276
+
 aura_directories:
   # Populated by Steps 2-4 of the Bedrock API Keys feature (#276).
   - api/server/controllers/aura/

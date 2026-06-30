@@ -50,6 +50,7 @@ jobs:
             if (file.startsWith('.github/')) continue;
             if (file === 'FORK_CHANGES.md') continue;
             if (file === 'AGENTS.md') continue;  // AuraWorx-owned root doc — boundary contract for agents
+            if (file === 'package-lock.json') continue;  // always regenerated when any dep changes
             if (auraDirs.some(dir => file.startsWith(dir))) continue;
             if (allowed.has(file)) continue;
             violations.push(file);
