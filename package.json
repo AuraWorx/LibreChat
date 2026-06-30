@@ -111,7 +111,7 @@
   "dependencies": {
     "@react-spring/web": "^9.7.5",
     "framer-motion": "^11.5.4",
-    "react-window": ">=1.8.5",
+    "react-window": "^1.8.10",
     "zone.js": "^0.15.0"
   },
   "devDependencies": {
@@ -145,6 +145,7 @@
     "typescript-eslint": "^8.24.0"
   },
   "overrides": {
+    "react-window": "1.8.10",
     "@anthropic-ai/sdk": "0.73.0",
     "@librechat/agents": {
       "@langchain/anthropic": {
