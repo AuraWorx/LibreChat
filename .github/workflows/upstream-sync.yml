@@ -1,0 +1,126 @@
+name: Upstream Sync
+
+# Mirrors the latest upstream tag from danny-avila/LibreChat into a
+# dedicated branch and opens a PR for human review.
+# - Clean merges → labelled `auto-merge-candidate`
+# - Conflict merges → labelled `needs-manual-resolution`
+
+on:
+  schedule:
+    - cron: '0 9 * * 1'   # Every Monday 09:00 UTC
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name  "upstream-sync-bot"
+          git config user.email "bot@auraworx.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/danny-avila/LibreChat.git || true
+          git fetch upstream --tags
+
+      - name: Determine latest upstream tag
+        id: upstream
+        run: |
+          LATEST=$(git tag -l --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          echo "tag=$LATEST" >> $GITHUB_OUTPUT
+          echo "Latest upstream tag: $LATEST"
+
+      - name: Check if sync branch already exists
+        id: branch_check
+        run: |
+          BRANCH="upstream-sync/${{ steps.upstream.outputs.tag }}"
+          if git ls-remote --exit-code origin "$BRANCH" > /dev/null 2>&1; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create mirror branch from upstream tag
+        if: steps.branch_check.outputs.exists == 'false'
+        run: |
+          TAG="${{ steps.upstream.outputs.tag }}"
+          BRANCH="upstream-sync/$TAG"
+          git checkout -b "$BRANCH" "refs/tags/$TAG"
+          git push origin "$BRANCH"
+
+      - name: Attempt merge into main (dry run)
+        if: steps.branch_check.outputs.exists == 'false'
+        id: merge_check
+        run: |
+          TAG="${{ steps.upstream.outputs.tag }}"
+          git checkout main
+          if git merge --no-commit --no-ff "refs/tags/$TAG" 2>&1; then
+            echo "conflicts=false" >> $GITHUB_OUTPUT
+          else
+            echo "conflicts=true" >> $GITHUB_OUTPUT
+          fi
+          git merge --abort 2>/dev/null || true
+
+      - name: Open PR — clean merge
+        if: >
+          steps.branch_check.outputs.exists == 'false' &&
+          steps.merge_check.outputs.conflicts == 'false'
+        uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c # v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: upstream-sync/${{ steps.upstream.outputs.tag }}
+          base: main
+          title: "chore: upstream sync ${{ steps.upstream.outputs.tag }} [clean]"
+          body: |
+            ## Upstream sync — ${{ steps.upstream.outputs.tag }}
+
+            Opened automatically. The merge is **conflict-free**.
+
+            **Before merging:**
+            - [ ] Review diff for changes affecting `aura/` integration points
+            - [ ] Check `.github/fork-boundary.yml` entry-point files for upstream changes
+            - [ ] Run E2E locally against a test stage
+
+            **Upstream release notes:**
+            https://github.com/danny-avila/LibreChat/releases/tag/${{ steps.upstream.outputs.tag }}
+          labels: upstream-sync, auto-merge-candidate
+
+      - name: Open PR — conflicts detected
+        if: >
+          steps.branch_check.outputs.exists == 'false' &&
+          steps.merge_check.outputs.conflicts == 'true'
+        uses: peter-evans/create-pull-request@c5a7806660adbe173f04e3e038b0ccdcd758773c # v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: upstream-sync/${{ steps.upstream.outputs.tag }}
+          base: main
+          title: "chore: upstream sync ${{ steps.upstream.outputs.tag }} [conflicts]"
+          body: |
+            ## Upstream sync — ${{ steps.upstream.outputs.tag }}
+
+            Opened automatically. **Merge conflicts were detected.**
+
+            **To resolve:**
+            ```bash
+            git fetch origin
+            git checkout -b resolve-upstream-sync/${{ steps.upstream.outputs.tag }} main
+            git merge origin/upstream-sync/${{ steps.upstream.outputs.tag }}
+            # Resolve conflicts — check FORK_CHANGES.md for which files to expect
+            git push origin resolve-upstream-sync/${{ steps.upstream.outputs.tag }}
+            ```
+
+            Focus conflict resolution on files listed in `.github/fork-boundary.yml`.
+
+            **Upstream release notes:**
+            https://github.com/danny-avila/LibreChat/releases/tag/${{ steps.upstream.outputs.tag }}
+          labels: upstream-sync, needs-manual-resolution
