@@ -10,6 +10,16 @@ async function streamBedrockResponse(bedrockStream, res) {
 
   try {
     for await (const item of bedrockStream) {
+      const streamErr =
+        item.internalServerException ||
+        item.modelStreamErrorException ||
+        item.modelTimeoutException ||
+        item.throttlingException;
+      if (streamErr) {
+        const err = new Error(streamErr.message || 'Bedrock stream error');
+        err.name = streamErr.name || 'ModelStreamErrorException';
+        throw err;
+      }
       const bytes = item.chunk?.bytes;
       if (bytes) {
         const text = Buffer.from(bytes).toString('utf8');
@@ -47,6 +57,7 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
   const usage = { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 };
   let headersSent = false;
   let contentStarted = false;
+  let pendingNovaStopReason = null;
 
   const stopReasonMap = { stop: 'end_turn', length: 'max_tokens', max_tokens: 'max_tokens' };
 
@@ -181,19 +192,26 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
           });
         }
         if (chunk.messageStop) {
-          const stopReason = chunk.messageStop.stopReason;
+          // Buffer stop reason — defer message_delta until metadata arrives with real token count.
+          pendingNovaStopReason = chunk.messageStop.stopReason;
           writeEvent({ type: 'content_block_stop', index: 0 });
-          writeEvent({
-            type: 'message_delta',
-            delta: { stop_reason: stopReasonMap[stopReason] ?? 'end_turn', stop_sequence: null },
-            usage: { output_tokens: usage.outputTokens },
-          });
-          writeEvent({ type: 'message_stop' });
         }
         if (chunk.metadata?.usage) {
           const metrics = chunk['amazon-bedrock-invocationMetrics'];
           usage.inputTokens = metrics?.inputTokenCount ?? chunk.metadata.usage.inputTokens ?? 0;
           usage.outputTokens = metrics?.outputTokenCount ?? chunk.metadata.usage.outputTokens ?? 0;
+          if (pendingNovaStopReason !== null) {
+            writeEvent({
+              type: 'message_delta',
+              delta: {
+                stop_reason: stopReasonMap[pendingNovaStopReason] ?? 'end_turn',
+                stop_sequence: null,
+              },
+              usage: { output_tokens: usage.outputTokens },
+            });
+            writeEvent({ type: 'message_stop' });
+            pendingNovaStopReason = null;
+          }
         }
         continue;
       }
