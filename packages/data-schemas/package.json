@@ -63,10 +63,6 @@
     "ts-node": "^10.9.2",
     "typescript": "^5.0.4"
   },
-  "dependencies": {
-    "winston": "^3.17.0",
-    "winston-daily-rotate-file": "^5.0.0"
-  },
   "peerDependencies": {
     "jsonwebtoken": "^9.0.2",
     "klona": "^2.0.6",
