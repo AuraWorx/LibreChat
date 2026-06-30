@@ -110,7 +110,9 @@
   "homepage": "https://librechat.ai/",
   "dependencies": {
     "@react-spring/web": "^9.7.5",
-    "framer-motion": "^11.5.4"
+    "framer-motion": "^11.5.4",
+    "react-window": ">=1.8.5",
+    "zone.js": "^0.15.0"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.10.1",
