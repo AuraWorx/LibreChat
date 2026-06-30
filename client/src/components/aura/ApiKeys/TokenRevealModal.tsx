@@ -34,6 +34,7 @@ async function copyToClipboard(text: string): Promise<boolean> {
 export default function TokenRevealModal({ token, keyName, onClose }: TokenRevealModalProps) {
   const [copied, setCopied] = useState(false);
   const [copyFailed, setCopyFailed] = useState(false);
+  const [exportCopied, setExportCopied] = useState(false);
 
   // Block Escape key from dismissing
   useEffect(() => {
@@ -57,6 +58,15 @@ export default function TokenRevealModal({ token, keyName, onClose }: TokenRevea
 
   const baseUrl = `https://${window.location.hostname}/bedrock`;
 
+  const handleCopyExport = async () => {
+    const exportText = `export ANTHROPIC_BASE_URL=${baseUrl}\nexport ANTHROPIC_API_KEY=${token}`;
+    const ok = await copyToClipboard(exportText);
+    if (ok) {
+      setExportCopied(true);
+      setTimeout(() => setExportCopied(false), 2000);
+    }
+  };
+
   return (
     <div className={cn('flex flex-col gap-4 p-4')} role="dialog" aria-modal="true">
       <div className="rounded-md bg-yellow-50 p-3 text-sm text-yellow-800 dark:bg-yellow-900/20 dark:text-yellow-200">
@@ -79,10 +89,17 @@ export default function TokenRevealModal({ token, keyName, onClose }: TokenRevea
       )}
       <div className="rounded border border-border-light bg-surface-secondary p-3 font-mono text-xs text-text-secondary">
         <p className="select-all">export ANTHROPIC_BASE_URL={baseUrl}</p>
-        <p className="select-all">export ANTHROPIC_AUTH_TOKEN={token}</p>
+        <p className="select-all">export ANTHROPIC_API_KEY={token}</p>
       </div>
-      <div className="flex justify-end">
-        <Button onClick={onClose}>I copied it</Button>
+      <div className="flex justify-end gap-2">
+        <Button
+          variant="outline"
+          onClick={handleCopyExport}
+          aria-label={exportCopied ? 'Copied!' : 'Copy export commands'}
+        >
+          {exportCopied ? 'Copied!' : 'Copy export commands'}
+        </Button>
+        <Button onClick={onClose}>Close</Button>
       </div>
     </div>
   );

@@ -62,6 +62,7 @@ export default function ApiKeysTab() {
       {pendingToken && (
         <OGDialog open onOpenChange={() => undefined}>
           <OGDialogContent
+            showCloseButton={false}
             onEscapeKeyDown={(e) => e.preventDefault()}
             onPointerDownOutside={(e) => e.preventDefault()}
           >

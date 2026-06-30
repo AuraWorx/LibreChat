@@ -47,7 +47,7 @@ describe('TokenRevealModal', () => {
   it('Copy button calls navigator.clipboard.writeText with the full token', async () => {
     render(<TokenRevealModal {...defaultProps} />);
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /copy/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
     });
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       'aB3cDxK2pQ9mNvR7tZ8sLfHgYj4UwI6oVx9zT',
@@ -64,10 +64,10 @@ describe('TokenRevealModal', () => {
     jest.useRealTimers();
   });
 
-  it('"I copied it" button calls onClose', () => {
+  it('"Close" button calls onClose', () => {
     const onClose = jest.fn();
     render(<TokenRevealModal {...defaultProps} onClose={onClose} />);
-    fireEvent.click(screen.getByRole('button', { name: /i copied it/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close/i }));
     expect(onClose).toHaveBeenCalled();
   });
 

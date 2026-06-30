@@ -6,8 +6,14 @@ const {
   InvokeModelWithResponseStreamCommand,
   CountTokensCommand,
 } = require('@aws-sdk/client-bedrock-runtime');
-const { translateRequestBody } = require('../../services/aura/bedrockTranslator');
-const { streamBedrockResponse } = require('../../services/aura/bedrockStreamer');
+const {
+  translateRequestBody,
+  normalizeResponse,
+} = require('../../services/aura/bedrockTranslator');
+const {
+  streamBedrockResponse,
+  streamOpenAICompatResponse,
+} = require('../../services/aura/bedrockStreamer');
 const auditLogger = require('../../services/aura/auditLogger');
 const BedrockDailyUsage = require('../../../models/aura/BedrockDailyUsage');
 const BedrockProxyConfig = require('../../../models/aura/BedrockProxyConfig');
@@ -257,6 +263,7 @@ async function handleMessages(req, res) {
     // Model allowlist check
     const modelError = checkAllowedModels(anthropicBody.model, bedrockKeyDoc);
     if (modelError) {
+      statusCode = 403;
       return res.status(403).json(modelError);
     }
 
@@ -264,10 +271,16 @@ async function handleMessages(req, res) {
     const limits = await getEffectiveLimits(bedrockKeyDoc);
     const dailyCheck = await checkDailyLimits(userId, limits);
     if (dailyCheck.exhausted) {
+      // Use 400 instead of 429 — the Anthropic SDK retries 429s automatically which causes
+      // Claude Code to loop indefinitely. 400 is non-retriable and surfaces as a clear error.
+      statusCode = 400;
       const { exhausted: _x, remainingOutputTokens: _r, ...errorFields } = dailyCheck;
-      return res.status(429).json({
-        error: 'daily_token_limit_exceeded',
-        message: 'Daily token budget exhausted. Resets at midnight UTC.',
+      return res.status(400).json({
+        type: 'error',
+        error: {
+          type: 'invalid_request_error',
+          message: 'Daily token budget exhausted. Resets at midnight UTC.',
+        },
         ...errorFields,
       });
     }
@@ -277,7 +290,7 @@ async function handleMessages(req, res) {
       limits.maxOutputTokensPerRequest,
       dailyCheck.remainingOutputTokens,
     );
-    const { modelId, body } = translateRequestBody(anthropicBody, betaHeader, {
+    const { modelId, body, format } = await translateRequestBody(anthropicBody, betaHeader, {
       maxOutputTokensPerRequest: effectiveOutputCap,
     });
     const bodyBytes = Buffer.from(JSON.stringify(body));
@@ -290,7 +303,8 @@ async function handleMessages(req, res) {
         accept: 'application/json',
       });
       const response = await getClient().send(command);
-      const usage = await streamBedrockResponse(response.body, res);
+      const streamer = format === 'anthropic' ? streamBedrockResponse : streamOpenAICompatResponse;
+      const usage = await streamer(response.body, res, modelId);
       requestTokens = usage.inputTokens || -1;
       responseTokens = usage.outputTokens || -1;
       cacheWriteTokens = usage.cacheWriteTokens;
@@ -304,11 +318,12 @@ async function handleMessages(req, res) {
       });
       const response = await getClient().send(command);
       const parsed = JSON.parse(Buffer.from(response.body).toString('utf8'));
-      requestTokens = parsed.usage?.input_tokens ?? -1;
-      responseTokens = parsed.usage?.output_tokens ?? -1;
-      cacheWriteTokens = parsed.usage?.cache_creation_input_tokens ?? 0;
-      cacheReadTokens = parsed.usage?.cache_read_input_tokens ?? 0;
-      res.status(200).json(parsed);
+      const normalized = normalizeResponse(parsed, format, modelId);
+      requestTokens = normalized.usage?.input_tokens ?? -1;
+      responseTokens = normalized.usage?.output_tokens ?? -1;
+      cacheWriteTokens = normalized.usage?.cache_creation_input_tokens ?? 0;
+      cacheReadTokens = normalized.usage?.cache_read_input_tokens ?? 0;
+      res.status(200).json(normalized);
     }
   } catch (err) {
     console.error('[bedrock_proxy_error]', err.name, err.message);
@@ -343,9 +358,18 @@ async function handleCountTokens(req, res) {
   const limits = await getEffectiveLimits(bedrockKeyDoc);
 
   try {
-    const { modelId, body } = translateRequestBody(anthropicBody, betaHeader, {
+    const { modelId, body, format } = await translateRequestBody(anthropicBody, betaHeader, {
       maxOutputTokensPerRequest: limits.maxOutputTokensPerRequest,
     });
+
+    // CountTokensCommand is Anthropic-only. For other formats, return a character-based
+    // estimate (~4 chars/token) so Claude Code's pre-flight check doesn't error out.
+    if (format !== 'anthropic') {
+      const text =
+        JSON.stringify(anthropicBody.messages || []) + JSON.stringify(anthropicBody.system || '');
+      return res.status(200).json({ input_tokens: Math.ceil(text.length / 4) });
+    }
+
     delete body.stream;
     const bodyBytes = Buffer.from(JSON.stringify(body));
     const command = new CountTokensCommand({
