@@ -145,7 +145,6 @@
     "typescript-eslint": "^8.24.0"
   },
   "overrides": {
-    "react-window": "1.8.10",
     "@anthropic-ai/sdk": "0.73.0",
     "@librechat/agents": {
       "@langchain/anthropic": {
