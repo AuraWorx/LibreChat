@@ -1,0 +1,16 @@
+# Fork CODEOWNERS — pair-review by @raoakkineni + @DatlaDevNest
+# Per AuraWorx/librechat-suite docs/fork/guardrails-and-enforcement.md §9.1.
+
+# Boundary contract
+/.github/fork-boundary.yml            @raoakkineni @DatlaDevNest
+/FORK_CHANGES.md                      @raoakkineni @DatlaDevNest
+
+# Workflows
+/.github/workflows/                   @raoakkineni @DatlaDevNest
+
+# AuraWorx-owned code (aura/ subdirectories anywhere in tree)
+/aura/                                @raoakkineni @DatlaDevNest
+/**/aura/                             @raoakkineni @DatlaDevNest
+
+# Default fallback (MUST come last — CODEOWNERS path-precedence)
+*                                     @raoakkineni @DatlaDevNest

@@ -1,0 +1,96 @@
+# Source of truth for every upstream file AuraWorx is permitted to modify.
+# Adding to this list requires a separate PR with justification.
+# All NEW logic goes in aura/ subdirectories, never in upstream-owned files.
+
+upstream_tag: v0.8.5
+
+allowed_modifications:
+  - path: api/server/controllers/TwoFactorController.js
+    reason: |
+      DocumentDB 5.0 rejects the mixed inclusion/exclusion Mongoose projection
+      emitted by upstream verify2FA/confirm2FA. Replaces with pure-inclusion.
+      Upstream PR candidate.
+      Tracks: AuraWorx/librechat-suite#259
+
+  - path: packages/data-provider/src/bedrock.ts
+    reason: |
+      bedrockInputParser forwards topK as camelCase to Bedrock. Bedrock only
+      accepts snake_case top_k AND rejects top_k entirely when Claude 4
+      adaptive thinking is active. Source-level fix replaces upstream's
+      runtime-fragile string-replace patch on the minified dist bundle.
+      Upstream PR candidate.
+      Tracks: AuraWorx/librechat-suite#269
+
+  - path: api/server/routes/index.js
+    reason: |
+      Exports bedrockKeys and bedrockProxy routers so they are picked up by
+      api/server/index.js. Entry-point only — no logic here.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: api/server/index.js
+    reason: |
+      Mounts /api/bedrock-keys (CRUD) and /bedrock (proxy) routers.
+      Two app.use() lines only — no other changes.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: client/jest.config.cjs
+    reason: |
+      Adds client/src/components/aura/ and client/src/hooks/aura/ to the
+      moduleNameMapper so Jest can resolve aura component imports in tests.
+      Entry-point config only — no logic here.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: client/src/components/Nav/Settings.tsx
+    reason: |
+      Adds the Bedrock API Keys tab to the LibreChat Settings dialog.
+      Minimal change: one import + one tab entry in the tabs array.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: client/src/locales/en/translation.json
+    reason: |
+      Adds English i18n keys for the Bedrock API Keys settings tab label.
+      No other locale changes — downstream translations are additive.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: packages/data-provider/src/config.ts
+    reason: |
+      Extends the EndpointSettings type to include bedrockApiKeys feature flag.
+      Type-only addition — no runtime logic changes.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: api/package.json
+    reason: |
+      Adds @aws-sdk/client-bedrock (management SDK for ListFoundationModels /
+      ListInferenceProfiles used by the Bedrock proxy dynamic model list).
+      Removes unused @opentelemetry/* peer deps that were carried over from the
+      baseline lockfile fix. No script or logic changes.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: package.json
+    reason: |
+      Adds framer-motion, @react-spring/web, hookified as explicit root
+      devDependencies to stabilize the lockfile — these were hoisted from
+      workspace deps but missing from root, causing npm ci peer-dep failures.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: Dockerfile
+    reason: |
+      Adds --legacy-peer-deps to npm ci to match the lockfile that requires it.
+      Single line change in the builder stage.
+      Tracks: AuraWorx/librechat-suite#276
+
+  - path: Dockerfile.multi
+    reason: |
+      Adds --legacy-peer-deps to npm ci to match the lockfile that requires it.
+      Single line change.
+      Tracks: AuraWorx/librechat-suite#276
+
+aura_directories:
+  # Populated by Steps 2-4 of the Bedrock API Keys feature (#276).
+  - api/server/controllers/aura/
+  - api/server/routes/aura/
+  - api/server/middleware/aura/
+  - api/server/services/aura/
+  - api/models/aura/
+  - client/src/components/aura/
+  - client/src/hooks/aura/

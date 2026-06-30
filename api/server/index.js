@@ -273,6 +273,8 @@ const startServer = async () => {
 
   app.use('/api/tags', routes.tags);
   app.use('/api/mcp', routes.mcp);
+  app.use('/api/bedrock-keys', routes.bedrockKeys);
+  app.use('/bedrock', routes.bedrockProxy);
   app.use('/api/rum', routes.rum);
 
   app.use('/metrics', metricsRouter);

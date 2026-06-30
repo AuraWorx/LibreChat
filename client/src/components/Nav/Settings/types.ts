@@ -11,7 +11,8 @@ export type SettingsTab =
   | SettingsTabValues.SPEECH
   | SettingsTabValues.DATA
   | SettingsTabValues.ACCOUNT
-  | SettingsTabValues.ABOUT;
+  | SettingsTabValues.ABOUT
+  | SettingsTabValues.API_KEYS;
 
 export type SectionId =
   | 'appearance'
@@ -132,5 +133,11 @@ export const TABS: TabMeta[] = [
     icon: createElement(Info, { className: 'icon-sm', 'aria-hidden': true }),
     sections: [{ id: 'about', labelKey: 'com_nav_setting_about' }],
     show: (ctx) => ctx.aboutEnabled,
+  },
+  {
+    id: SettingsTabValues.API_KEYS,
+    labelKey: 'com_nav_setting_api_keys' as TranslationKeys,
+    icon: createElement('span', { className: 'icon-sm', 'aria-hidden': true }, '🔑'),
+    sections: [],
   },
 ];

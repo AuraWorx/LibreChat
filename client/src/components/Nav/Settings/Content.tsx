@@ -1,5 +1,7 @@
 import { useMemo } from 'react';
+import { SettingsTabValues } from 'librechat-data-provider';
 import type { SettingsContextValue, SettingsTab, SettingEntry } from './types';
+import ApiKeysTab from '~/components/aura/ApiKeys';
 import { filterSettings } from './search';
 import { useLocalize } from '~/hooks';
 import { registry } from './registry';
@@ -52,6 +54,10 @@ export default function Content({ activeTab, query, ctx }: ContentProps) {
         )}
       </div>
     );
+  }
+
+  if (activeTab === SettingsTabValues.API_KEYS) {
+    return <ApiKeysTab />;
   }
 
   return (

@@ -2466,6 +2466,10 @@ export enum SettingsTabValues {
    * Tab for About / Build Info
    */
   ABOUT = 'about',
+  /**
+   * Tab for Bedrock API Key management (AuraWorx)
+   */
+  API_KEYS = 'apiKeys',
 }
 
 export enum STTProviders {

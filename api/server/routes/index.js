@@ -36,6 +36,8 @@ const keys = require('./keys');
 const user = require('./user');
 const mcp = require('./mcp');
 const rum = require('./rum');
+const bedrockKeys = require('./aura/bedrockKeys');
+const bedrockProxy = require('./aura/bedrockProxy');
 
 module.exports = {
   rum,
@@ -76,4 +78,6 @@ module.exports = {
   categories,
   staticRoute,
   accessPermissions,
+  bedrockKeys,
+  bedrockProxy,
 };
