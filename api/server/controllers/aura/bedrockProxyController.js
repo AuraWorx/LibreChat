@@ -6,8 +6,14 @@ const {
   InvokeModelWithResponseStreamCommand,
   CountTokensCommand,
 } = require('@aws-sdk/client-bedrock-runtime');
-const { translateRequestBody, normalizeResponse } = require('../../services/aura/bedrockTranslator');
-const { streamBedrockResponse, streamOpenAICompatResponse } = require('../../services/aura/bedrockStreamer');
+const {
+  translateRequestBody,
+  normalizeResponse,
+} = require('../../services/aura/bedrockTranslator');
+const {
+  streamBedrockResponse,
+  streamOpenAICompatResponse,
+} = require('../../services/aura/bedrockStreamer');
 const auditLogger = require('../../services/aura/auditLogger');
 const BedrockDailyUsage = require('../../../models/aura/BedrockDailyUsage');
 const BedrockProxyConfig = require('../../../models/aura/BedrockProxyConfig');
@@ -359,7 +365,8 @@ async function handleCountTokens(req, res) {
     // CountTokensCommand is Anthropic-only. For other formats, return a character-based
     // estimate (~4 chars/token) so Claude Code's pre-flight check doesn't error out.
     if (format !== 'anthropic') {
-      const text = JSON.stringify(anthropicBody.messages || []) + JSON.stringify(anthropicBody.system || '');
+      const text =
+        JSON.stringify(anthropicBody.messages || []) + JSON.stringify(anthropicBody.system || '');
       return res.status(200).json({ input_tokens: Math.ceil(text.length / 4) });
     }
 

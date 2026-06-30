@@ -25,7 +25,7 @@ jobs:
           cat /tmp/changed_files.txt
 
       - name: Install js-yaml
-        run: npm install --no-save js-yaml
+        run: npm install --no-save js-yaml@^4 --legacy-peer-deps
 
       - name: Check boundary
         run: |

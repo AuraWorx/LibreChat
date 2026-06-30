@@ -96,11 +96,19 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
               usage: { input_tokens: chunk.prompt_token_count ?? 0, output_tokens: 0 },
             },
           });
-          writeEvent({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+          writeEvent({
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'text', text: '' },
+          });
           contentStarted = true;
         }
         if (chunk.generation) {
-          writeEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: chunk.generation } });
+          writeEvent({
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: chunk.generation },
+          });
         }
         if (chunk.stop_reason) {
           const metrics = chunk['amazon-bedrock-invocationMetrics'];
@@ -109,7 +117,10 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
           writeEvent({ type: 'content_block_stop', index: 0 });
           writeEvent({
             type: 'message_delta',
-            delta: { stop_reason: stopReasonMap[chunk.stop_reason] ?? 'end_turn', stop_sequence: null },
+            delta: {
+              stop_reason: stopReasonMap[chunk.stop_reason] ?? 'end_turn',
+              stop_sequence: null,
+            },
             usage: { output_tokens: usage.outputTokens },
           });
           writeEvent({ type: 'message_stop' });
@@ -118,7 +129,13 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
       }
 
       // Nova streaming: { messageStart/contentBlockDelta/contentBlockStop/messageStop/metadata }
-      if ('messageStart' in chunk || 'contentBlockDelta' in chunk || 'contentBlockStop' in chunk || 'messageStop' in chunk || ('metadata' in chunk && 'usage' in chunk.metadata)) {
+      if (
+        'messageStart' in chunk ||
+        'contentBlockDelta' in chunk ||
+        'contentBlockStop' in chunk ||
+        'messageStop' in chunk ||
+        ('metadata' in chunk && 'usage' in chunk.metadata)
+      ) {
         if (chunk.messageStart && !contentStarted) {
           writeEvent({
             type: 'message_start',
@@ -130,7 +147,11 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
               usage: { input_tokens: 0, output_tokens: 0 },
             },
           });
-          writeEvent({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+          writeEvent({
+            type: 'content_block_start',
+            index: 0,
+            content_block: { type: 'text', text: '' },
+          });
           contentStarted = true;
         }
         const deltaText = chunk.contentBlockDelta?.delta?.text;
@@ -138,12 +159,26 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
           if (!contentStarted) {
             writeEvent({
               type: 'message_start',
-              message: { id: `msg_nova_${modelId.slice(-6)}`, type: 'message', role: 'assistant', model: modelId, usage: { input_tokens: 0, output_tokens: 0 } },
+              message: {
+                id: `msg_nova_${modelId.slice(-6)}`,
+                type: 'message',
+                role: 'assistant',
+                model: modelId,
+                usage: { input_tokens: 0, output_tokens: 0 },
+              },
             });
-            writeEvent({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } });
+            writeEvent({
+              type: 'content_block_start',
+              index: 0,
+              content_block: { type: 'text', text: '' },
+            });
             contentStarted = true;
           }
-          writeEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: deltaText } });
+          writeEvent({
+            type: 'content_block_delta',
+            index: 0,
+            delta: { type: 'text_delta', text: deltaText },
+          });
         }
         if (chunk.messageStop) {
           const stopReason = chunk.messageStop.stopReason;
@@ -189,7 +224,11 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
 
       const deltaText = choice.delta?.content;
       if (deltaText) {
-        writeEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: deltaText } });
+        writeEvent({
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: deltaText },
+        });
       }
 
       // Final chunk: has finish_reason and optionally usage.

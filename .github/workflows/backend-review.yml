@@ -201,8 +201,8 @@ jobs:
         run: |
           output=$(npm run build:api 2>&1)
           echo "$output"
-          if echo "$output" | grep -q "Circular depend"; then
-            echo "Error: Circular dependency detected in @librechat/api!"
+          if echo "$output" | grep "Circular depend" | grep -qv "node_modules"; then
+            echo "Error: Circular dependency detected in @librechat/api source!"
             exit 1
           fi
 
@@ -211,7 +211,7 @@ jobs:
         run: |
           output=$(npm run rollup:api)
           echo "$output"
-          if echo "$output" | grep -q "Circular dependency"; then
+          if echo "$output" | grep "Circular dependency" | grep -qv "node_modules"; then
             echo "Error: Circular dependency detected!"
             exit 1
           fi

@@ -47,7 +47,7 @@ describe('TokenRevealModal', () => {
   it('Copy button calls navigator.clipboard.writeText with the full token', async () => {
     render(<TokenRevealModal {...defaultProps} />);
     await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: /copy/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
     });
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(
       'aB3cDxK2pQ9mNvR7tZ8sLfHgYj4UwI6oVx9zT',

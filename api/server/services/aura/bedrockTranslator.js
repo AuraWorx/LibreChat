@@ -21,14 +21,20 @@ const BEDROCK_VALID_BETAS = new Set(['extended-output-2025-06-30']);
 // Once the cache loads, ground-truth data from Bedrock's own APIs takes over.
 
 const BARE_ONLY_PROVIDERS = new Set([
-  'google', 'zai', 'minimax', 'moonshot', 'moonshotai', 'nvidia', 'openai', 'qwen', 'luma',
-  'mistral', 'deepseek',
+  'google',
+  'zai',
+  'minimax',
+  'moonshot',
+  'moonshotai',
+  'nvidia',
+  'openai',
+  'qwen',
+  'luma',
+  'mistral',
+  'deepseek',
 ]);
 
-const CROSS_REGION_MODEL_IDS = new Set([
-  'deepseek.r1-v1:0',
-  'mistral.pixtral-large-2502-v1:0',
-]);
+const CROSS_REGION_MODEL_IDS = new Set(['deepseek.r1-v1:0', 'mistral.pixtral-large-2502-v1:0']);
 
 // ─── Dynamic Model Cache ───────────────────────────────────────────────────────
 // On first translateRequestBody call, we fetch:
@@ -80,7 +86,10 @@ async function ensureModelCache() {
     };
   } catch (err) {
     // Non-fatal: degrade to static fallback, retry next request.
-    console.warn('[bedrockTranslator] model cache load failed, using static fallback:', err.message);
+    console.warn(
+      '[bedrockTranslator] model cache load failed, using static fallback:',
+      err.message,
+    );
   }
 }
 
@@ -178,9 +187,7 @@ function translateModelId(modelId) {
     const dotIdx = modelId.indexOf('.');
     if (dotIdx > 0) {
       const canonical = resolveCanonicalModelId(modelId);
-      return hasSystemInferenceProfile(canonical, prefix)
-        ? `${prefix}.${canonical}`
-        : canonical;
+      return hasSystemInferenceProfile(canonical, prefix) ? `${prefix}.${canonical}` : canonical;
     }
     // Bare name: prepend anthropic. and resolve via cache.
     const canonical = resolveCanonicalModelId(`anthropic.${modelId}`);
@@ -209,7 +216,12 @@ function getModelNativeFormat(modelId) {
 // ─── Body translators ──────────────────────────────────────────────────────────
 
 function mapStopReason(reason) {
-  const MAP = { stop: 'end_turn', length: 'max_tokens', max_tokens: 'max_tokens', end_turn: 'end_turn' };
+  const MAP = {
+    stop: 'end_turn',
+    length: 'max_tokens',
+    max_tokens: 'max_tokens',
+    end_turn: 'end_turn',
+  };
   return MAP[reason] ?? 'end_turn';
 }
 
@@ -227,7 +239,9 @@ function extractContentText(content) {
 function toNovaBody(anthropicBody, opts) {
   const maxTokensCap = opts?.maxOutputTokensPerRequest ?? null;
   // Nova rejects role:"system" inside messages — extract and merge into the top-level system field.
-  const { system: inlineSys, messages: filteredMsgs } = extractSystemMessages(anthropicBody.messages || []);
+  const { system: inlineSys, messages: filteredMsgs } = extractSystemMessages(
+    anthropicBody.messages || [],
+  );
   const messages = filteredMsgs.map((msg) => ({
     role: msg.role,
     content:
@@ -245,9 +259,11 @@ function toNovaBody(anthropicBody, opts) {
   const requested = maxTokensCap ?? anthropicBody.max_tokens ?? 4096;
   const maxTokens = Math.min(requested, NOVA_MAX_OUTPUT);
   body.inferenceConfig = { maxTokens };
-  if (anthropicBody.temperature != null) body.inferenceConfig.temperature = anthropicBody.temperature;
+  if (anthropicBody.temperature != null)
+    body.inferenceConfig.temperature = anthropicBody.temperature;
   if (anthropicBody.top_p != null) body.inferenceConfig.topP = anthropicBody.top_p;
-  if (anthropicBody.stop_sequences?.length) body.inferenceConfig.stopSequences = anthropicBody.stop_sequences;
+  if (anthropicBody.stop_sequences?.length)
+    body.inferenceConfig.stopSequences = anthropicBody.stop_sequences;
   return body;
 }
 
@@ -256,7 +272,9 @@ function toMetaBody(anthropicBody, opts) {
   const parts = [];
   const sysText = extractSystemText(anthropicBody.system);
   if (sysText) {
-    parts.push(`<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n${sysText}<|eot_id|>`);
+    parts.push(
+      `<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n${sysText}<|eot_id|>`,
+    );
   } else {
     parts.push('<|begin_of_text|>');
   }
@@ -265,7 +283,10 @@ function toMetaBody(anthropicBody, opts) {
     parts.push(`<|start_header_id|>${msg.role}<|end_header_id|>\n\n${text}<|eot_id|>`);
   }
   parts.push('<|start_header_id|>assistant<|end_header_id|>\n\n');
-  const body = { prompt: parts.join(''), max_gen_len: maxTokensCap ?? anthropicBody.max_tokens ?? 512 };
+  const body = {
+    prompt: parts.join(''),
+    max_gen_len: maxTokensCap ?? anthropicBody.max_tokens ?? 512,
+  };
   if (anthropicBody.temperature != null) body.temperature = anthropicBody.temperature;
   if (anthropicBody.top_p != null) body.top_p = anthropicBody.top_p;
   return body;
@@ -404,9 +425,9 @@ async function getLiveModelList() {
 
   for (const id of _modelCache.modelIds) {
     const summary = _modelCache.modelSummaries && _modelCache.modelSummaries.get(id);
-    const inputMods = summary ? (summary.inputModalities || []) : ['TEXT'];
-    const outputMods = summary ? (summary.outputModalities || []) : ['TEXT'];
-    const lifecycle = summary ? (summary.modelLifecycle && summary.modelLifecycle.status) : 'ACTIVE';
+    const inputMods = summary ? summary.inputModalities || [] : ['TEXT'];
+    const outputMods = summary ? summary.outputModalities || [] : ['TEXT'];
+    const lifecycle = summary ? summary.modelLifecycle && summary.modelLifecycle.status : 'ACTIVE';
 
     if (!inputMods.includes('TEXT') || !outputMods.includes('TEXT') || lifecycle === 'LEGACY') {
       continue;
@@ -424,8 +445,9 @@ async function getLiveModelList() {
     const hasProfile = _modelCache.profileIds.has(`${prefix}.${id}`);
 
     // Exclude models that require an inference profile but have none available in this account
-    const inferenceTypes = summary ? (summary.inferenceTypesSupported || []) : [];
-    const profileOnly = inferenceTypes.length > 0 &&
+    const inferenceTypes = summary ? summary.inferenceTypesSupported || [] : [];
+    const profileOnly =
+      inferenceTypes.length > 0 &&
       inferenceTypes.includes('INFERENCE_PROFILE') &&
       !inferenceTypes.includes('ON_DEMAND');
     if (profileOnly && !hasProfile) continue;

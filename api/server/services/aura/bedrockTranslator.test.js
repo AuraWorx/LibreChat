@@ -77,8 +77,12 @@ describe('translateModelId (static fallback — no cache)', () => {
   });
 
   it('keeps other mistral models bare — us.mistral.ministral-* is invalid on Bedrock', () => {
-    expect(translateModelId('mistral.ministral-3-8b-instruct')).toBe('mistral.ministral-3-8b-instruct');
-    expect(translateModelId('mistral.mistral-large-3-675b-instruct')).toBe('mistral.mistral-large-3-675b-instruct');
+    expect(translateModelId('mistral.ministral-3-8b-instruct')).toBe(
+      'mistral.ministral-3-8b-instruct',
+    );
+    expect(translateModelId('mistral.mistral-large-3-675b-instruct')).toBe(
+      'mistral.mistral-large-3-675b-instruct',
+    );
   });
 
   it('keeps google.gemma-* bare — us.google.* is invalid on Bedrock', () => {
@@ -101,9 +105,7 @@ describe('translateModelId (static fallback — no cache)', () => {
     expect(translateModelId('eu.anthropic.claude-sonnet-4-6')).toBe(
       'eu.anthropic.claude-sonnet-4-6',
     );
-    expect(translateModelId('ap.anthropic.claude-haiku-4-5')).toBe(
-      'ap.anthropic.claude-haiku-4-5',
-    );
+    expect(translateModelId('ap.anthropic.claude-haiku-4-5')).toBe('ap.anthropic.claude-haiku-4-5');
   });
 
   it('passes through global. profiles unchanged', () => {
@@ -143,10 +145,7 @@ describe('translateModelId (dynamic cache)', () => {
   });
 
   it('wraps model in regional prefix when inference profile found in cache', () => {
-    _setTestCache(
-      ['deepseek.r1-v1:0'],
-      ['us.deepseek.r1-v1:0'],
-    );
+    _setTestCache(['deepseek.r1-v1:0'], ['us.deepseek.r1-v1:0']);
     expect(translateModelId('deepseek.r1-v1:0')).toBe('us.deepseek.r1-v1:0');
   });
 
@@ -158,7 +157,9 @@ describe('translateModelId (dynamic cache)', () => {
 
   it('still passes through already-prefixed regional IDs unchanged regardless of cache', () => {
     _setTestCache(['anthropic.claude-sonnet-4-6'], ['us.anthropic.claude-sonnet-4-6']);
-    expect(translateModelId('us.anthropic.claude-sonnet-4-6')).toBe('us.anthropic.claude-sonnet-4-6');
+    expect(translateModelId('us.anthropic.claude-sonnet-4-6')).toBe(
+      'us.anthropic.claude-sonnet-4-6',
+    );
   });
 
   it('strips -v1:0 suffix to resolve canonical ID when model omits it (e.g. google.gemma-3-27b-it)', () => {
@@ -170,10 +171,7 @@ describe('translateModelId (dynamic cache)', () => {
   });
 
   it('resolves bare -v1 suffix (no colon) for models like anthropic.claude-opus-4-6-v1', () => {
-    _setTestCache(
-      ['anthropic.claude-opus-4-6-v1'],
-      ['us.anthropic.claude-opus-4-6-v1'],
-    );
+    _setTestCache(['anthropic.claude-opus-4-6-v1'], ['us.anthropic.claude-opus-4-6-v1']);
     // bare name resolves through anthropic. prepend + forward -v1 match
     expect(translateModelId('claude-opus-4-6')).toBe('us.anthropic.claude-opus-4-6-v1');
     // full provider-prefixed form also works
@@ -219,7 +217,11 @@ describe('getModelNativeFormat', () => {
 
 describe('normalizeResponse', () => {
   it('passes through Anthropic responses unchanged', () => {
-    const resp = { type: 'message', content: [{ type: 'text', text: 'hi' }], usage: { input_tokens: 5, output_tokens: 2 } };
+    const resp = {
+      type: 'message',
+      content: [{ type: 'text', text: 'hi' }],
+      usage: { input_tokens: 5, output_tokens: 2 },
+    };
     expect(normalizeResponse(resp, 'anthropic', 'us.anthropic.claude-sonnet-4-6')).toBe(resp);
   });
 
@@ -362,7 +364,11 @@ describe('translateRequestBody', () => {
   // -- OpenAI-compat models (Gemma, GLM, DeepSeek, Mistral) --
 
   it('produces OpenAI-compat body for google.gemma-* models', async () => {
-    const input = { model: 'google.gemma-3-27b-it', messages: [{ role: 'user', content: 'hello' }], max_tokens: 50 };
+    const input = {
+      model: 'google.gemma-3-27b-it',
+      messages: [{ role: 'user', content: 'hello' }],
+      max_tokens: 50,
+    };
     const { body, format, modelId } = await translateRequestBody(input);
     expect(format).toBe('openai');
     expect(modelId).toBe('google.gemma-3-27b-it');
@@ -372,7 +378,11 @@ describe('translateRequestBody', () => {
   });
 
   it('produces OpenAI-compat body for zai.glm-* models', async () => {
-    const input = { model: 'zai.glm-5', messages: [{ role: 'user', content: 'hello' }], max_tokens: 50 };
+    const input = {
+      model: 'zai.glm-5',
+      messages: [{ role: 'user', content: 'hello' }],
+      max_tokens: 50,
+    };
     const { body, format } = await translateRequestBody(input);
     expect(format).toBe('openai');
     expect(body.messages).toEqual([{ role: 'user', content: 'hello' }]);
@@ -402,15 +412,25 @@ describe('translateRequestBody', () => {
   });
 
   it('caps max_tokens for OpenAI-compat models', async () => {
-    const input = { model: 'google.gemma-3-27b-it', messages: [{ role: 'user', content: 'hi' }], max_tokens: 8000 };
-    const { body } = await translateRequestBody(input, undefined, { maxOutputTokensPerRequest: 2000 });
+    const input = {
+      model: 'google.gemma-3-27b-it',
+      messages: [{ role: 'user', content: 'hi' }],
+      max_tokens: 8000,
+    };
+    const { body } = await translateRequestBody(input, undefined, {
+      maxOutputTokensPerRequest: 2000,
+    });
     expect(body.max_tokens).toBe(2000);
   });
 
   // -- Meta Llama models --
 
   it('produces Meta prompt body for meta.* models', async () => {
-    const input = { model: 'meta.llama3-3-70b-instruct-v1:0', messages: [{ role: 'user', content: 'hello' }], max_tokens: 32 };
+    const input = {
+      model: 'meta.llama3-3-70b-instruct-v1:0',
+      messages: [{ role: 'user', content: 'hello' }],
+      max_tokens: 32,
+    };
     const { body, format, modelId } = await translateRequestBody(input);
     expect(format).toBe('meta');
     expect(modelId).toBe('us.meta.llama3-3-70b-instruct-v1:0');
@@ -436,15 +456,25 @@ describe('translateRequestBody', () => {
   });
 
   it('caps max_gen_len for Meta models', async () => {
-    const input = { model: 'meta.llama3-3-70b-instruct-v1:0', messages: [{ role: 'user', content: 'hi' }], max_tokens: 8000 };
-    const { body } = await translateRequestBody(input, undefined, { maxOutputTokensPerRequest: 1000 });
+    const input = {
+      model: 'meta.llama3-3-70b-instruct-v1:0',
+      messages: [{ role: 'user', content: 'hi' }],
+      max_tokens: 8000,
+    };
+    const { body } = await translateRequestBody(input, undefined, {
+      maxOutputTokensPerRequest: 1000,
+    });
     expect(body.max_gen_len).toBe(1000);
   });
 
   // -- Nova models --
 
   it('produces Nova body for amazon.nova-* models', async () => {
-    const input = { model: 'amazon.nova-lite-v1:0', messages: [{ role: 'user', content: 'hello' }], max_tokens: 50 };
+    const input = {
+      model: 'amazon.nova-lite-v1:0',
+      messages: [{ role: 'user', content: 'hello' }],
+      max_tokens: 50,
+    };
     const { body, format, modelId } = await translateRequestBody(input);
     expect(format).toBe('nova');
     expect(modelId).toBe('us.amazon.nova-lite-v1:0');

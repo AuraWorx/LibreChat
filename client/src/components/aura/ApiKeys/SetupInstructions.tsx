@@ -31,7 +31,7 @@ function CopyButton({ text }: { text: string }) {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);
       }}
-      className="ml-1.5 inline-flex flex-shrink-0 items-center rounded p-0.5 text-text-tertiary hover:text-text-secondary transition-colors"
+      className="ml-1.5 inline-flex flex-shrink-0 items-center rounded p-0.5 text-text-tertiary transition-colors hover:text-text-secondary"
     >
       {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
     </button>
@@ -88,12 +88,11 @@ export default function SetupInstructions() {
         {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
       </button>
       {open && (
-        <div className="border-t border-border-light px-4 py-3 space-y-4 text-xs text-text-secondary">
-
+        <div className="space-y-4 border-t border-border-light px-4 py-3 text-xs text-text-secondary">
           {/* Environment variables */}
           <div className="space-y-1">
             <p className="font-medium text-text-primary">Environment</p>
-            <div className="font-mono space-y-0.5">
+            <div className="space-y-0.5 font-mono">
               <p>export ANTHROPIC_BASE_URL={baseUrl}</p>
               <p>export ANTHROPIC_API_KEY=&lt;your-key&gt;</p>
             </div>
@@ -108,7 +107,7 @@ export default function SetupInstructions() {
           {/* SDK / direct API */}
           <div className="space-y-1">
             <p className="font-medium text-text-primary">SDK / direct API</p>
-            <div className="font-mono space-y-0.5">
+            <div className="space-y-0.5 font-mono">
               <p>{'# Python'}</p>
               <p>{'client = Anthropic()  # picks up env vars'}</p>
               <p>{'# TypeScript'}</p>
@@ -122,7 +121,7 @@ export default function SetupInstructions() {
               href="/codesetup"
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs font-medium text-blue-500 hover:text-blue-400 transition-colors"
+              className="inline-flex items-center gap-1 text-xs font-medium text-blue-500 transition-colors hover:text-blue-400"
             >
               Full setup guide (macOS, Windows, VS Code, JetBrains) →
             </a>
@@ -136,25 +135,29 @@ export default function SetupInstructions() {
                 type="button"
                 onClick={fetchModels}
                 disabled={loadingModels}
-                className="inline-flex items-center gap-1 rounded border border-border-light px-2 py-0.5 text-text-tertiary hover:text-text-secondary disabled:opacity-50 transition-colors"
+                className="inline-flex items-center gap-1 rounded border border-border-light px-2 py-0.5 text-text-tertiary transition-colors hover:text-text-secondary disabled:opacity-50"
               >
                 <RefreshCw size={10} className={loadingModels ? 'animate-spin' : ''} />
                 Refresh
               </button>
             </div>
 
-            {loadingModels && (
-              <p className="py-3 text-center text-text-tertiary">Loading…</p>
-            )}
+            {loadingModels && <p className="py-3 text-center text-text-tertiary">Loading…</p>}
 
             {!loadingModels && models.length > 0 && (
               <div className="overflow-auto rounded border border-border-light">
                 <table className="w-full text-xs">
                   <thead>
                     <tr className="border-b border-border-light bg-surface-secondary">
-                      <th className="py-1.5 pl-3 pr-2 text-left font-semibold text-text-secondary w-28">Provider</th>
-                      <th className="py-1.5 px-2 text-left font-semibold text-text-secondary w-40">Model</th>
-                      <th className="py-1.5 pl-2 pr-3 text-left font-semibold text-text-secondary">Bedrock model ID</th>
+                      <th className="w-28 py-1.5 pl-3 pr-2 text-left font-semibold text-text-secondary">
+                        Provider
+                      </th>
+                      <th className="w-40 px-2 py-1.5 text-left font-semibold text-text-secondary">
+                        Model
+                      </th>
+                      <th className="py-1.5 pl-2 pr-3 text-left font-semibold text-text-secondary">
+                        Bedrock model ID
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -164,7 +167,7 @@ export default function SetupInstructions() {
                           <td className="py-1.5 pl-3 pr-2 text-text-secondary">
                             {mi === 0 ? (PROVIDER_LABELS[providerKey] ?? providerKey) : ''}
                           </td>
-                          <td className="py-1.5 px-2 text-text-secondary">{model.name}</td>
+                          <td className="px-2 py-1.5 text-text-secondary">{model.name}</td>
                           <td className="py-1.5 pl-2 pr-3">
                             <span className="flex items-center font-mono text-text-primary">
                               <span className="select-all">{model.id}</span>
@@ -172,7 +175,7 @@ export default function SetupInstructions() {
                             </span>
                           </td>
                         </tr>
-                      ))
+                      )),
                     )}
                   </tbody>
                 </table>
@@ -183,7 +186,6 @@ export default function SetupInstructions() {
               <p className="py-3 text-center text-text-tertiary">No models available.</p>
             )}
           </div>
-
         </div>
       )}
     </div>

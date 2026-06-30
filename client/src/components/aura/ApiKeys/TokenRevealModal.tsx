@@ -92,7 +92,11 @@ export default function TokenRevealModal({ token, keyName, onClose }: TokenRevea
         <p className="select-all">export ANTHROPIC_API_KEY={token}</p>
       </div>
       <div className="flex justify-end gap-2">
-        <Button variant="outline" onClick={handleCopyExport} aria-label={exportCopied ? 'Copied!' : 'Copy export commands'}>
+        <Button
+          variant="outline"
+          onClick={handleCopyExport}
+          aria-label={exportCopied ? 'Copied!' : 'Copy export commands'}
+        >
           {exportCopied ? 'Copied!' : 'Copy export commands'}
         </Button>
         <Button onClick={onClose}>Close</Button>
