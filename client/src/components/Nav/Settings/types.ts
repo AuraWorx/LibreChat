@@ -1,5 +1,5 @@
 import { createElement } from 'react';
-import { MessageSquare, Info } from 'lucide-react';
+import { MessageSquare, Info, KeyRound } from 'lucide-react';
 import { SettingsTabValues } from 'librechat-data-provider';
 import { GearIcon, DataIcon, UserIcon, SpeechIcon } from '@librechat/client';
 import type { ComponentType, ReactNode } from 'react';
@@ -137,7 +137,7 @@ export const TABS: TabMeta[] = [
   {
     id: SettingsTabValues.API_KEYS,
     labelKey: 'com_nav_setting_api_keys' as TranslationKeys,
-    icon: createElement('span', { className: 'icon-sm', 'aria-hidden': true }, '🔑'),
+    icon: createElement(KeyRound, { className: 'icon-sm', 'aria-hidden': true }),
     sections: [],
   },
 ];
