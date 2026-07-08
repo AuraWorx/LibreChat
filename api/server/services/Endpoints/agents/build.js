@@ -15,7 +15,7 @@ const buildOptions = (req, endpoint, parsedBody, endpointType) => {
   // Assistants cover this in assistants/build.js; named agents use their configured
   // instructions; this closes the gap for Bedrock and other ephemeral-agent endpoints.
   if (typeof artifacts === 'string' && !isAgentsEndpoint(endpoint)) {
-    const artifactPrompt = generateArtifactsPrompt({ endpoint, artifacts });
+    const artifactPrompt = generateArtifactsPrompt({ endpoint, artifacts, model: model_parameters.model });
     if (typeof artifactPrompt === 'string' && artifactPrompt) {
       const existingPrefix = typeof model_parameters.promptPrefix === 'string'
         ? model_parameters.promptPrefix
