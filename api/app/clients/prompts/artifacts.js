@@ -510,16 +510,48 @@ Here are some examples of correct usage of artifacts:
 
 ---`;
 
+// Compact prompt for smaller models (Nova Lite, Nova Micro) that ignore the full prompt's
+// "when not to use" nuance and fall back to plain code blocks.
+const novaLiteArtifactPrompt = dedent`You MUST wrap all code responses in artifact blocks using this exact format:
+
+:::artifact{identifier="kebab-case-id" type="MIME-TYPE" title="Short Title"}
+\`\`\`
+YOUR CODE HERE
+\`\`\`
+:::
+
+MIME types:
+- React component → application/vnd.react
+- HTML page → text/html
+- Mermaid diagram → application/vnd.mermaid
+- Markdown → text/markdown
+- Any other code → text/plain
+
+Rules:
+- Always use a default export for React components.
+- Use Tailwind for styling in React. Import hooks from "react" (e.g. \`import { useState } from "react"\`).
+- Available libraries in React artifacts: lucide-react, recharts, three.js, date-fns, react-day-picker.
+- Import shadcn/ui components from \`/components/ui/name\` (e.g. \`import { Button } from "/components/ui/button"\`).
+- No external images; use \`<img src="/api/placeholder/400/320" />\` placeholders.
+- NEVER output plain code blocks for substantial code — always use the artifact format above.`;
+
+const COMPACT_ARTIFACT_MODEL_PATTERN = /nova-(lite|micro)|gemma-3-27b/i;
+
 /**
  *
  * @param {Object} params
  * @param {EModelEndpoint | string} params.endpoint - The current endpoint
  * @param {ArtifactModes} params.artifacts - The current artifact mode
+ * @param {string} [params.model] - Optional model ID for model-specific prompt selection
  * @returns
  */
-const generateArtifactsPrompt = ({ endpoint, artifacts }) => {
+const generateArtifactsPrompt = ({ endpoint, artifacts, model }) => {
   if (artifacts === ArtifactModes.CUSTOM) {
     return null;
+  }
+
+  if (model && COMPACT_ARTIFACT_MODEL_PATTERN.test(model)) {
+    return novaLiteArtifactPrompt;
   }
 
   let prompt = artifactsPrompt;
