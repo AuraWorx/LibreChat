@@ -1162,6 +1162,7 @@ export async function initializeAgent(
     const artifactsPromptResult = generateArtifactsPrompt({
       endpoint: agent.provider,
       artifacts: agent.artifacts as never,
+      model: agent.model ?? undefined,
     });
     appendAdditionalInstructions(agent, artifactsPromptResult);
   }
