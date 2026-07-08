@@ -554,6 +554,12 @@ const generateArtifactsPrompt = ({ endpoint, artifacts, model }) => {
     return novaLiteArtifactPrompt;
   }
 
+  // All bedrock non-Claude models get the compact prompt — they cannot reliably follow
+  // the full ~11k-char prompt. Claude models on bedrock have 'anthropic' in their ID.
+  if (endpoint === EModelEndpoint.bedrock && (!model || !model.includes('anthropic'))) {
+    return novaLiteArtifactPrompt;
+  }
+
   let prompt = artifactsPrompt;
   if (endpoint !== EModelEndpoint.anthropic) {
     prompt = artifactsOpenAIPrompt;
