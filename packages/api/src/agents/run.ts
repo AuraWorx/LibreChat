@@ -1160,7 +1160,12 @@ export async function createRun({
     calibrationRatio,
     indexTokenCountMap,
     subagentUsageSink,
-    eagerEventToolExecution: { enabled: true },
+    eagerEventToolExecution: {
+      enabled: true,
+      // Claude Sonnet can self-correct tool args mid-stream; exclude code execution
+      // tools so recordArgsEqual doesn't fire "Tool call changed" on the correction.
+      excludeToolNames: ['execute_code', 'bash_tool', 'create_file', 'edit_file', 'ask_user_question'],
+    },
     // Derive the Langfuse trace id deterministically from runId so message
     // feedback can be scored against the trace without a lookup (see the
     // feedback route in api/server/routes/messages.js). No-op unless Langfuse
