@@ -653,7 +653,7 @@ describe('bedrockInputParser', () => {
       expect(additionalFields.anthropic_beta).toEqual(BEDROCK_CLAUDE_4_BETAS);
     });
 
-    test('should preserve sampling parameters for Opus 4.6 Bedrock models', () => {
+    test('should drop Top-K but preserve temperature and topP for Opus 4.6 Bedrock models', () => {
       const input = {
         model: 'anthropic.claude-opus-4-6-v1',
         temperature: 0.7,
@@ -661,10 +661,121 @@ describe('bedrockInputParser', () => {
         topK: 40,
       };
       const result = bedrockInputParser.parse(input) as Record<string, unknown>;
-      const additionalFields = result.additionalModelRequestFields as Record<string, unknown>;
+      const additionalFields =
+        (result.additionalModelRequestFields as Record<string, unknown>) ?? {};
       expect(result.temperature).toBe(0.7);
       expect(result.topP).toBe(0.9);
-      expect(additionalFields.top_k).toBe(40);
+      expect(additionalFields.topK).toBeUndefined();
+      expect(additionalFields.top_k).toBeUndefined();
+    });
+
+    /**
+     * Issue #318 regression coverage — no Top-K value, in either spelling,
+     * arriving by any reachable input path, may reach Bedrock for an Anthropic
+     * model on which reasoning mode is active. Success is asserted on the
+     * outgoing request shape, per plan §5.1.
+     */
+    test('#318 removes root-level topK for Opus 4.6 (adaptive reasoning)', () => {
+      const result = bedrockInputParser.parse({
+        model: 'anthropic.claude-opus-4-6-v1',
+        topK: 40,
+      }) as Record<string, unknown>;
+      const amrf = (result.additionalModelRequestFields as Record<string, unknown>) ?? {};
+      expect(result.topK).toBeUndefined();
+      expect(amrf.topK).toBeUndefined();
+      expect(amrf.top_k).toBeUndefined();
+    });
+
+    test('#318 removes root-level topK for Claude 3.7 Sonnet (enabled reasoning)', () => {
+      const result = bedrockInputParser.parse({
+        model: 'anthropic.claude-3-7-sonnet',
+        topK: 40,
+      }) as Record<string, unknown>;
+      const amrf = (result.additionalModelRequestFields as Record<string, unknown>) ?? {};
+      expect(result.topK).toBeUndefined();
+      expect(amrf.topK).toBeUndefined();
+      expect(amrf.top_k).toBeUndefined();
+    });
+
+    test('#318 removes root-level top_k for Opus 4.6 when reasoning is active', () => {
+      const result = bedrockInputParser.parse({
+        model: 'anthropic.claude-opus-4-6-v1',
+        top_k: 40,
+      }) as Record<string, unknown>;
+      const amrf = (result.additionalModelRequestFields as Record<string, unknown>) ?? {};
+      expect(amrf.top_k).toBeUndefined();
+    });
+
+    test('#318 removes persisted additionalModelRequestFields.topK for Opus 4.6', () => {
+      const result = bedrockInputParser.parse({
+        model: 'anthropic.claude-opus-4-6-v1',
+        additionalModelRequestFields: { topK: 40 },
+      }) as Record<string, unknown>;
+      const amrf = result.additionalModelRequestFields as Record<string, unknown>;
+      expect(amrf.topK).toBeUndefined();
+    });
+
+    test('#318 removes persisted additionalModelRequestFields.top_k for Opus 4.6', () => {
+      const result = bedrockInputParser.parse({
+        model: 'anthropic.claude-opus-4-6-v1',
+        additionalModelRequestFields: { top_k: 40 },
+      }) as Record<string, unknown>;
+      const amrf = result.additionalModelRequestFields as Record<string, unknown>;
+      expect(amrf.top_k).toBeUndefined();
+    });
+
+    test('#318 removes persisted additionalModelRequestFields.top_k for Claude 3.7 Sonnet', () => {
+      const result = bedrockInputParser.parse({
+        model: 'anthropic.claude-3-7-sonnet',
+        additionalModelRequestFields: { top_k: 40 },
+      }) as Record<string, unknown>;
+      const amrf = result.additionalModelRequestFields as Record<string, unknown>;
+      expect(amrf.top_k).toBeUndefined();
+    });
+
+    test('#318 preserves top_k for a non-Anthropic model (paths 2 and 4)', () => {
+      const result = bedrockInputParser.parse({
+        model: 'amazon.nova-pro-v1:0',
+        top_k: 40,
+        additionalModelRequestFields: { top_k: 20 },
+      }) as Record<string, unknown>;
+      const amrf = result.additionalModelRequestFields as Record<string, unknown>;
+      expect(amrf.top_k).toBeDefined();
+    });
+
+    test('#318 still removes topK for a non-Anthropic model (paths 1 and 3)', () => {
+      const result = bedrockInputParser.parse({
+        model: 'amazon.nova-pro-v1:0',
+        topK: 40,
+        additionalModelRequestFields: { topK: 20 },
+      }) as Record<string, unknown>;
+      const amrf = (result.additionalModelRequestFields as Record<string, unknown>) ?? {};
+      expect(result.topK).toBeUndefined();
+      expect(amrf.topK).toBeUndefined();
+    });
+
+    test('#318 leaves unrelated pass-through parameters intact', () => {
+      const result = bedrockInputParser.parse({
+        model: 'anthropic.claude-opus-4-6-v1',
+        custom_flag: true,
+        topK: 40,
+      }) as Record<string, unknown>;
+      const amrf = result.additionalModelRequestFields as Record<string, unknown>;
+      expect(amrf.custom_flag).toBe(true);
+      expect(amrf.topK).toBeUndefined();
+    });
+
+    test('#318 keeps top_k but drops topK for Opus 4.6 when reasoning is disabled', () => {
+      const result = bedrockInputParser.parse({
+        model: 'anthropic.claude-opus-4-6-v1',
+        thinking: false,
+        top_k: 40,
+        topK: 40,
+        additionalModelRequestFields: { top_k: 20, topK: 20 },
+      }) as Record<string, unknown>;
+      const amrf = result.additionalModelRequestFields as Record<string, unknown>;
+      expect(amrf.topK).toBeUndefined();
+      expect(amrf.top_k).toBeDefined();
     });
 
     test('should set adaptive thinking and strip sampling params for Fable 5 Bedrock models', () => {

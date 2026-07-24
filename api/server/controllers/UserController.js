@@ -331,10 +331,7 @@ const deleteUserController = async (req, res) => {
   const { user } = req;
 
   try {
-    const existingUser = await db.getUserById(
-      user.id,
-      '+totpSecret +backupCodes _id twoFactorEnabled',
-    );
+    const existingUser = await db.getUserById(user.id, '+totpSecret +backupCodes');
     if (existingUser && existingUser.twoFactorEnabled) {
       const { token, backupCode } = req.body;
       const result = await verifyOTPOrBackupCode({ user: existingUser, token, backupCode });

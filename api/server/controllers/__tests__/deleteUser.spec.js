@@ -138,6 +138,18 @@ function stubDeletionMocks() {
   mockDeleteUserSkills.mockResolvedValue(0);
 }
 
+/**
+ * DocumentDB 5.0 rejects projections mixing `+select:false` overrides with bare
+ * field names (AuraWorx/librechat-suite#317). Only the selector string can
+ * expose this defect here, since the model layer is mocked.
+ */
+const PURE_OVERRIDE_SELECTOR = /^\+\w+(?: \+\w+)*$/;
+
+function expectDocumentDbSafeSelector() {
+  expect(mockGetUserById).toHaveBeenCalled();
+  expect(mockGetUserById.mock.calls[0][1]).toMatch(PURE_OVERRIDE_SELECTOR);
+}
+
 beforeEach(() => {
   jest.clearAllMocks();
   stubDeletionMocks();
@@ -151,6 +163,7 @@ describe('deleteUserController - 2FA enforcement', () => {
 
     await deleteUserController(req, res);
 
+    expectDocumentDbSafeSelector();
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.send).toHaveBeenCalledWith({ message: 'User deleted' });
     expect(mockDeleteMessages).toHaveBeenCalled();
@@ -257,6 +270,7 @@ describe('deleteUserController - 2FA enforcement', () => {
 
     await deleteUserController(req, res);
 
+    expectDocumentDbSafeSelector();
     expect(mockVerifyOTPOrBackupCode).toHaveBeenCalledWith({
       user: existingUser,
       token: '123456',
