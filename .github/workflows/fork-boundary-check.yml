@@ -15,6 +15,9 @@ jobs:
   boundary-check:
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    env:
+      # Resolve js-yaml from an isolated install (see "Install js-yaml" step).
+      NODE_PATH: ${{ runner.temp }}/fork-boundary-tools/node_modules
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -29,7 +32,10 @@ jobs:
           cat /tmp/changed_files.txt
 
       - name: Install js-yaml
-        run: npm install --no-save js-yaml@^4 --legacy-peer-deps
+        # Install into an isolated prefix so the repo-root `overrides.js-yaml`
+        # does not reject the direct install with EOVERRIDE. NODE_PATH (job env)
+        # lets the node steps below resolve it.
+        run: npm install --prefix "${{ runner.temp }}/fork-boundary-tools" js-yaml@^4
 
       - name: Check boundary
         if: github.event_name == 'pull_request'
