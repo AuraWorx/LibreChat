@@ -1,8 +1,14 @@
 # Source of truth for every upstream file AuraWorx is permitted to modify.
 # Adding to this list requires a separate PR with justification.
 # All NEW logic goes in aura/ subdirectories, never in upstream-owned files.
+#
+# `required_signatures` (optional, per entry): literal substrings that MUST be
+# present in the file. The Fork Boundary Check fails if any declared signature
+# is missing — turning this manifest from a permission list into a presence
+# assertion so an AuraWorx patch cannot be silently dropped by a rebase.
+# Tracks: AuraWorx/librechat-suite#318, AuraWorx/librechat-suite#319
 
-upstream_tag: v0.8.5
+upstream_tag: v0.8.7
 
 allowed_modifications:
   - path: api/server/controllers/TwoFactorController.js
@@ -22,12 +28,16 @@ allowed_modifications:
 
   - path: packages/data-provider/src/bedrock.ts
     reason: |
-      bedrockInputParser forwards topK as camelCase to Bedrock. Bedrock only
-      accepts snake_case top_k AND rejects top_k entirely when Claude 4
-      adaptive thinking is active. Source-level fix replaces upstream's
-      runtime-fragile string-replace patch on the minified dist bundle.
+      bedrockInputParser must drop camelCase topK for every model (Bedrock
+      rejects it) and drop snake_case top_k whenever reasoning mode is active
+      (Anthropic rejects it while thinking/adaptive). Source-level fix replaces
+      upstream's runtime-fragile string-replace patch on the minified dist
+      bundle.
       Upstream PR candidate.
-      Tracks: AuraWorx/librechat-suite#269
+      Tracks: AuraWorx/librechat-suite#269, AuraWorx/librechat-suite#318
+    required_signatures:
+      - "key !== 'topK'"
+      - "reasoningActive || shouldOmitSamplingParameters"
 
   - path: api/server/routes/index.js
     reason: |

@@ -7,11 +7,14 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
     branches: [main, develop]
+  push:
+    tags:
+      - 'v*-aura.*'
 
 jobs:
   boundary-check:
     runs-on: ubuntu-latest
-    if: github.event.pull_request.draft == false
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -19,6 +22,7 @@ jobs:
 
       - name: Get changed files
         id: changed
+        if: github.event_name == 'pull_request'
         run: |
           git fetch origin ${{ github.base_ref }}
           git diff --name-only origin/${{ github.base_ref }}...HEAD > /tmp/changed_files.txt
@@ -28,6 +32,7 @@ jobs:
         run: npm install --no-save js-yaml@^4 --legacy-peer-deps
 
       - name: Check boundary
+        if: github.event_name == 'pull_request'
         run: |
           node - <<'EOF'
           const fs   = require('fs');
@@ -68,6 +73,7 @@ jobs:
           EOF
 
       - name: Verify allowed modifications are minimal
+        if: github.event_name == 'pull_request'
         run: |
           git fetch origin ${{ github.base_ref }}
           node - <<'EOF'
@@ -101,4 +107,44 @@ jobs:
             process.exit(1);
           }
           console.log('All entry-point modifications are within the 10-line limit.');
+          EOF
+
+      - name: Verify required patch signatures are present
+        run: |
+          node - <<'EOF'
+          const fs   = require('fs');
+          const yaml = require('js-yaml');
+
+          const boundary = yaml.load(
+            fs.readFileSync('.github/fork-boundary.yml', 'utf8')
+          );
+          const entries = boundary.allowed_modifications || [];
+
+          const missing = [];
+          for (const entry of entries) {
+            const signatures = entry.required_signatures || [];
+            if (signatures.length === 0) continue;
+
+            let content;
+            try {
+              content = fs.readFileSync(entry.path, 'utf8');
+            } catch {
+              signatures.forEach(sig => missing.push({ path: entry.path, sig, reason: 'file not found' }));
+              continue;
+            }
+            for (const sig of signatures) {
+              if (!content.includes(sig)) {
+                missing.push({ path: entry.path, sig, reason: 'signature absent' });
+              }
+            }
+          }
+
+          if (missing.length > 0) {
+            console.error('\nFork patch presence check FAILED — a required AuraWorx patch is missing:\n');
+            missing.forEach(m => console.error(`  ${m.path} :: "${m.sig}" (${m.reason})`));
+            console.error('\nAn AuraWorx source-level fix appears to have been dropped (e.g. by an upstream rebase).');
+            console.error('Re-apply the fix, or update required_signatures in .github/fork-boundary.yml if the patch legitimately changed shape.');
+            process.exit(1);
+          }
+          console.log('All required AuraWorx patch signatures are present.');
           EOF

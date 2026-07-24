@@ -348,11 +348,14 @@ export const bedrockInputParser = s.tConversationSchema
 
     Object.entries(typedData).forEach(([key, value]) => {
       if (!knownKeys.includes(key)) {
-        if (key === 'topK') {
-          additionalFields['top_k'] = value;
-        } else {
+        if (key !== 'topK') {
           additionalFields[key] = value;
         }
+        /**
+         * Bedrock's Converse API rejects the camelCase `topK` outright
+         * (`topK: Extra inputs are not permitted`) for every model, so drop it
+         * rather than forward it. See AuraWorx/librechat-suite#318.
+         */
         delete typedData[key];
       }
     });
@@ -457,6 +460,14 @@ export const bedrockInputParser = s.tConversationSchema
     const isAnthropicModel =
       typeof typedData.model === 'string' && typedData.model.includes('anthropic.');
 
+    /**
+     * Reasoning ("thinking") mode is active when the block above left a thinking
+     * config in place. Bedrock rejects `top_k` while reasoning/adaptive thinking
+     * is active, so this gates the snake_case cleanup below. See
+     * AuraWorx/librechat-suite#318.
+     */
+    const reasoningActive = additionalFields.thinking != null;
+
     /** Strip stale fields from previously-persisted additionalModelRequestFields */
     if (
       typeof typedData.additionalModelRequestFields === 'object' &&
@@ -475,23 +486,31 @@ export const bedrockInputParser = s.tConversationSchema
         delete amrf.reasoning_effort;
       }
 
+      /** #318: Bedrock never accepts the camelCase topK — remove it for every model. */
+      delete amrf.topK;
+      /** #318: top_k is forbidden while reasoning is active; omit-sampling models drop it too. */
+      if (reasoningActive || shouldOmitSamplingParameters) {
+        delete amrf.top_k;
+      }
       if (shouldOmitSamplingParameters) {
         delete amrf.temperature;
         delete amrf.topP;
         delete amrf.top_p;
-        delete amrf.topK;
-        delete amrf.top_k;
       }
     }
 
+    /** #318: Bedrock never accepts the camelCase topK — remove it for every model. */
+    delete additionalFields.topK;
+    /** #318: top_k is forbidden while reasoning is active; omit-sampling models drop it too. */
+    if (reasoningActive || shouldOmitSamplingParameters) {
+      delete additionalFields.top_k;
+    }
     if (shouldOmitSamplingParameters) {
       delete typedData.temperature;
       delete typedData.topP;
       delete additionalFields.temperature;
       delete additionalFields.topP;
       delete additionalFields.top_p;
-      delete additionalFields.topK;
-      delete additionalFields.top_k;
     }
 
     /** Default promptCache for claude and nova models, if not defined */
