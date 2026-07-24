@@ -15,6 +15,13 @@ The machine-readable source of truth for the boundary contract is
 - **Upstream PR:** Not yet filed (planned post exit-gate)
 - **Conflict risk on upstream sync:** Low (file rarely changes upstream)
 
+### `api/server/controllers/UserController.js`
+
+- **Reason:** Same DocumentDB 5.0 mixed-projection defect as `TwoFactorController.js`, in `deleteUserController`'s 2FA pre-check (AuraWorx/librechat-suite#317)
+- **Mechanism:** Single projection string narrowed to only `+select:false` overrides — `_id` and `twoFactorEnabled` are returned by default and were never needed as explicit tokens
+- **Upstream PR:** Not yet filed (planned post exit-gate)
+- **Conflict risk on upstream sync:** Medium (file sees active upstream development)
+
 ### `packages/data-provider/src/bedrock.ts`
 
 - **Reason:** Bedrock topK / Claude 4 adaptive-thinking validation error (AuraWorx/librechat-suite#269)

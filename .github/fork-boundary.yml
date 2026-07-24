@@ -12,6 +12,14 @@ allowed_modifications:
       Upstream PR candidate.
       Tracks: AuraWorx/librechat-suite#259
 
+  - path: api/server/controllers/UserController.js
+    reason: |
+      Same DocumentDB 5.0 mixed-projection defect as TwoFactorController.js:
+      deleteUserController's 2FA pre-check selector mixed +select:false
+      overrides with bare field names. Narrowed to pure-+ overrides.
+      Upstream PR candidate.
+      Tracks: AuraWorx/librechat-suite#317
+
   - path: packages/data-provider/src/bedrock.ts
     reason: |
       bedrockInputParser forwards topK as camelCase to Bedrock. Bedrock only
