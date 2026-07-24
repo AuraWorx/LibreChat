@@ -20,7 +20,7 @@ function mockFetch(status: number, body: unknown) {
     status,
     json: () => Promise.resolve(body),
   } as Response);
-  global.fetch = mockFn;
+  global.fetch = mockFn as unknown as typeof fetch;
   return mockFn;
 }
 
@@ -45,7 +45,7 @@ describe('useApiKeys — fetchKeys', () => {
       new Promise<Response>((r) => {
         resolveFetch = r;
       }),
-    );
+    ) as unknown as typeof fetch;
     const { result } = renderHook(() => useApiKeys());
     expect(result.current.isLoading).toBe(true);
     await act(async () => {
@@ -59,7 +59,7 @@ describe('useApiKeys — fetchKeys', () => {
   });
 
   it('sets error state on network failure', async () => {
-    global.fetch = jest.fn().mockRejectedValue(new Error('network'));
+    global.fetch = jest.fn().mockRejectedValue(new Error('network')) as unknown as typeof fetch;
     const { result } = renderHook(() => useApiKeys());
     await act(async () => {});
     expect(result.current.error).toBeTruthy();
@@ -108,7 +108,7 @@ describe('useApiKeys — createKey', () => {
       await result.current.createKey('my-key');
     });
     expect(result.current.keys).toHaveLength(1);
-    expect((result.current.keys[0] as Record<string, unknown>).token).toBeUndefined();
+    expect((result.current.keys[0] as { token?: unknown }).token).toBeUndefined();
   });
 
   it('resolves with { error: "duplicate_name" } on 409 without throwing', async () => {

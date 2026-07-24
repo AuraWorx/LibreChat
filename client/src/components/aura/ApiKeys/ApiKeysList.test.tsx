@@ -17,7 +17,7 @@ jest.mock('@librechat/client', () => ({
 jest.mock('~/utils', () => ({ cn: (...args: string[]) => args.filter(Boolean).join(' ') }));
 
 const MOCK_KEY = {
-  _id: 'key1',
+  id: 'key1',
   name: 'claude-code-laptop',
   lastFour: 'x9zT',
   createdAt: '2026-05-28T00:00:00.000Z',
