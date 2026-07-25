@@ -1,5 +1,19 @@
 'use strict';
 
+// The compression middleware (api/server/index.js) buffers writes until enough
+// data accumulates or the stream ends. Without an explicit flush after every
+// event, a slow generation (large tool-using response) sits unflushed for its
+// entire duration — the client sees zero bytes and times out before the final
+// flush at res.end(), even though the server completes normally and logs 200.
+// res.flush only exists when compression() is active (absent if
+// DISABLE_COMPRESSION is set), so guard the call — same pattern as
+// routes/agents/index.js.
+function flushRes(res) {
+  if (typeof res.flush === 'function') {
+    res.flush();
+  }
+}
+
 // Returns token usage object so the controller can update the daily accumulator.
 async function streamBedrockResponse(bedrockStream, res) {
   res.setHeader('Content-Type', 'text/event-stream');
@@ -24,6 +38,7 @@ async function streamBedrockResponse(bedrockStream, res) {
       if (bytes) {
         const text = Buffer.from(bytes).toString('utf8');
         res.write(`data: ${text}\n\n`);
+        flushRes(res);
         try {
           const event = JSON.parse(text);
           if (event.type === 'message_start' && event.message?.usage) {
@@ -45,6 +60,7 @@ async function streamBedrockResponse(bedrockStream, res) {
       error: { type: 'api_error', message: 'Stream interrupted' },
     });
     res.write(`data: ${errorEvent}\n\n`);
+    flushRes(res);
   }
 
   res.end();
@@ -69,6 +85,7 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
       headersSent = true;
     }
     res.write(`data: ${JSON.stringify(event)}\n\n`);
+    flushRes(res);
   }
 
   try {
@@ -272,6 +289,7 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
     res.write(
       `data: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'Stream interrupted' } })}\n\n`,
     );
+    flushRes(res);
   }
 
   if (!headersSent) {
