@@ -37,20 +37,34 @@ async function streamBedrockResponse(bedrockStream, res) {
       const bytes = item.chunk?.bytes;
       if (bytes) {
         const text = Buffer.from(bytes).toString('utf8');
-        res.write(`data: ${text}\n\n`);
-        flushRes(res);
+        // The Anthropic SDK's SSE decoder dispatches on the named `event:` line
+        // (sse.event === 'message_start', etc.) — NOT on the `type` field inside
+        // `data:`. Bedrock's raw event stream has no SSE framing of its own (we
+        // decode it from the AWS event-stream binary format), so without an
+        // explicit `event:` line here, every frame we forward matches none of
+        // the SDK's checks and gets silently dropped — the client sees a
+        // well-formed but completely unrecognized stream, i.e. zero chunks.
+        let parsed;
         try {
-          const event = JSON.parse(text);
-          if (event.type === 'message_start' && event.message?.usage) {
-            const u = event.message.usage;
+          parsed = JSON.parse(text);
+        } catch {
+          /* non-JSON chunk — forward as data-only, no event name available */
+        }
+        if (parsed?.type) {
+          res.write(`event: ${parsed.type}\ndata: ${text}\n\n`);
+        } else {
+          res.write(`data: ${text}\n\n`);
+        }
+        flushRes(res);
+        if (parsed) {
+          if (parsed.type === 'message_start' && parsed.message?.usage) {
+            const u = parsed.message.usage;
             usage.inputTokens = u.input_tokens ?? 0;
             usage.cacheWriteTokens = u.cache_creation_input_tokens ?? 0;
             usage.cacheReadTokens = u.cache_read_input_tokens ?? 0;
-          } else if (event.type === 'message_delta' && event.usage) {
-            usage.outputTokens = event.usage.output_tokens ?? 0;
+          } else if (parsed.type === 'message_delta' && parsed.usage) {
+            usage.outputTokens = parsed.usage.output_tokens ?? 0;
           }
-        } catch {
-          /* non-JSON chunk — skip */
         }
       }
     }
@@ -59,7 +73,7 @@ async function streamBedrockResponse(bedrockStream, res) {
       type: 'error',
       error: { type: 'api_error', message: 'Stream interrupted' },
     });
-    res.write(`data: ${errorEvent}\n\n`);
+    res.write(`event: error\ndata: ${errorEvent}\n\n`);
     flushRes(res);
   }
 
@@ -84,7 +98,9 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
       res.setHeader('Connection', 'keep-alive');
       headersSent = true;
     }
-    res.write(`data: ${JSON.stringify(event)}\n\n`);
+    // See streamBedrockResponse: the Anthropic SDK dispatches on the named
+    // `event:` line, not on the `type` field inside `data:`.
+    res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
     flushRes(res);
   }
 
@@ -287,7 +303,7 @@ async function streamOpenAICompatResponse(bedrockStream, res, modelId) {
       throw err;
     }
     res.write(
-      `data: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'Stream interrupted' } })}\n\n`,
+      `event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'api_error', message: 'Stream interrupted' } })}\n\n`,
     );
     flushRes(res);
   }

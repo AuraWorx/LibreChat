@@ -40,11 +40,14 @@ describe('streamBedrockResponse', () => {
     expect(res.setHeader).toHaveBeenCalledWith('Connection', 'keep-alive');
   });
 
-  it('re-emits each chunk bytes as SSE data line', async () => {
+  it('re-emits each chunk bytes as a named SSE event + data line', async () => {
     const payload = JSON.stringify({ type: 'content_block_delta', delta: { text: 'hi' } });
     const res = makeRes();
     await streamBedrockResponse(makeStream([{ chunk: { bytes: Buffer.from(payload) } }]), res);
-    expect(res.write).toHaveBeenCalledWith(`data: ${payload}\n\n`);
+    // The Anthropic SDK's SSE decoder dispatches on the named `event:` line
+    // (sse.event === 'content_block_delta'), not on the `type` field inside
+    // `data:` — omitting it means every frame is silently unrecognized.
+    expect(res.write).toHaveBeenCalledWith(`event: content_block_delta\ndata: ${payload}\n\n`);
   });
 
   it('skips chunks without bytes', async () => {
