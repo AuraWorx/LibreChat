@@ -100,11 +100,19 @@ export function createConversationMethods(
 
   /**
    * Retrieves a single conversation for a given user and conversation ID.
+   *
+   * Reads primary: the connection defaults to readPreference=secondaryPreferred,
+   * but this point-lookup is on the critical path of nearly every chat request
+   * (validateMessageReq, abortRun, abortMiddleware, etc.) and routinely runs
+   * moments after the conversation itself was just written. A secondary that
+   * hasn't caught up to DocumentDB's replication yet returns a false miss.
    */
   async function getConvo(user: string, conversationId: string) {
     try {
       const Conversation = mongoose.models.Conversation as Model<IConversation>;
-      return await Conversation.findOne({ user, conversationId }).lean<IConversation>();
+      return await Conversation.findOne({ user, conversationId })
+        .read('primary')
+        .lean<IConversation>();
     } catch (error) {
       logger.error('[getConvo] Error getting single conversation', error);
       throw new Error('Error getting single conversation');

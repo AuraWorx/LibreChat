@@ -181,10 +181,12 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
 
         try {
           const Message = mongoose.models.Message as Model<IMessage>;
+          // Read primary: this fires immediately after a write conflict on the
+          // very same messageId, so a lagging secondary can miss it entirely.
           const existingMessage = await Message.findOne({
             messageId: params.messageId,
             user: userId,
-          });
+          }).read('primary');
 
           if (existingMessage) {
             return existingMessage.toObject();
@@ -331,7 +333,12 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
   ) {
     try {
       const Message = mongoose.models.Message as Model<IMessage>;
-      const message = await Message.findOne({ messageId, user: userId }).lean<IMessage>();
+      // Read primary: used by regenerate/edit-and-resubmit right after the
+      // target message was written. A miss here silently deletes nothing
+      // instead of erroring, so the race is worse than a visible 404.
+      const message = await Message.findOne({ messageId, user: userId })
+        .read('primary')
+        .lean<IMessage>();
 
       if (message) {
         const query = Message.find({ conversationId, user: userId });
@@ -463,11 +470,17 @@ export function createMessageMethods(mongoose: typeof import('mongoose')): Messa
 
   /**
    * Retrieves a single message from the database.
+   *
+   * Reads primary: the connection defaults to readPreference=secondaryPreferred,
+   * but callers of this point-lookup (execute_code tool calls, /branch, /artifact,
+   * TTS playback) routinely read a messageId moments after it was written. A
+   * secondary that hasn't yet caught up to DocumentDB's replication returns a
+   * false miss here, surfacing as a 404 on the first attempt only.
    */
   async function getMessage({ user, messageId }: { user: string; messageId: string }) {
     try {
       const Message = mongoose.models.Message as Model<IMessage>;
-      return await Message.findOne({ user, messageId }).lean<IMessage>();
+      return await Message.findOne({ user, messageId }).read('primary').lean<IMessage>();
     } catch (err) {
       logger.error('Error getting message:', err);
       throw err;
