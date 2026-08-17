@@ -57,7 +57,7 @@ describe('bedrockEndpointSchema', () => {
   });
 });
 
-describe('custom endpoint schema — provider/apiVersion', () => {
+describe('custom endpoint schema — provider/headers/queryParams', () => {
   function parseCustomEndpoint(overrides: Record<string, unknown>) {
     return configSchema.safeParse({
       version: '1.0',
@@ -66,7 +66,7 @@ describe('custom endpoint schema — provider/apiVersion', () => {
           {
             name: 'Azure',
             apiKey: '${AZURE_API_KEY}',
-            baseURL: 'https://my-resource.cognitiveservices.azure.com/openai',
+            baseURL: 'https://my-resource.openai.azure.com/openai/deployments/phi-4-mini-test',
             models: { default: ['phi-4-mini-test'], fetch: true },
             ...overrides,
           },
@@ -75,10 +75,10 @@ describe('custom endpoint schema — provider/apiVersion', () => {
     });
   }
 
-  it('accepts provider: azureOpenAI with apiVersion set', () => {
+  it('accepts generic headers and queryParams (e.g. Azure api-key header + api-version param)', () => {
     const result = parseCustomEndpoint({
-      provider: 'azureOpenAI',
-      apiVersion: '2024-05-01-preview',
+      headers: { 'api-key': '${AZURE_API_KEY}' },
+      queryParams: { 'api-version': '2024-05-01-preview' },
     });
 
     expect(result.success).toBe(true);
@@ -90,21 +90,10 @@ describe('custom endpoint schema — provider/apiVersion', () => {
     expect(result.success).toBe(true);
   });
 
-  it('rejects an arbitrary provider value outside anthropic/azureOpenAI', () => {
-    const result = parseCustomEndpoint({ provider: 'not-a-real-provider' });
-
-    expect(result.success).toBe(false);
-  });
-
-  it('allows provider: azureOpenAI without apiVersion at the schema level (enforced at init time instead)', () => {
-    /**
-     * apiVersion is intentionally schema-optional — `initializeCustom` throws
-     * a clear runtime error if it's missing when provider: azureOpenAI is
-     * set. Enforcing it here too would duplicate that message in two places.
-     */
+  it('rejects a provider value other than anthropic', () => {
     const result = parseCustomEndpoint({ provider: 'azureOpenAI' });
 
-    expect(result.success).toBe(true);
+    expect(result.success).toBe(false);
   });
 
   it('still rejects an empty models.default array (regression guard)', () => {
@@ -115,7 +104,7 @@ describe('custom endpoint schema — provider/apiVersion', () => {
           {
             name: 'Azure',
             apiKey: '${AZURE_API_KEY}',
-            baseURL: 'https://my-resource.cognitiveservices.azure.com/openai',
+            baseURL: 'https://my-resource.openai.azure.com/openai/deployments/phi-4-mini-test',
             models: { default: [], fetch: true },
           },
         ],

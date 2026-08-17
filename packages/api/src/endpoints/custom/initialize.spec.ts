@@ -51,14 +51,17 @@ function createParams(overrides: {
   userApiKey?: string;
   expiresAt?: string;
   headers?: Record<string, string>;
+  queryParams?: Record<string, string>;
+  models?: Record<string, unknown>;
 }): BaseInitializeParams {
   const { apiKey = 'sk-test-key', baseURL = 'https://api.example.com/v1' } = overrides;
 
   mockGetCustomEndpointConfig.mockReturnValue({
     apiKey,
     baseURL,
-    models: {},
+    models: overrides.models ?? {},
     headers: overrides.headers,
+    queryParams: overrides.queryParams,
   });
 
   const db = {
@@ -703,7 +706,7 @@ describe('initializeCustom – native Anthropic provider', () => {
   });
 });
 
-describe('initializeCustom – native Azure OpenAI provider', () => {
+describe('initializeCustom – generic queryParams passthrough', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetOpenAIConfig.mockReturnValue({
@@ -712,86 +715,49 @@ describe('initializeCustom – native Azure OpenAI provider', () => {
     });
   });
 
-  function createAzureParams(
-    config: Record<string, unknown>,
-    model_parameters: Record<string, unknown> = { model: 'phi-4-mini-test' },
-  ): BaseInitializeParams {
-    mockGetCustomEndpointConfig.mockReturnValue(config);
-    return {
-      req: {
-        user: { id: 'user-1', email: 'user@example.com' },
-        body: { conversationId: 'convo-1' },
-        config: {},
-      } as unknown as BaseInitializeParams['req'],
-      endpoint: 'Azure',
-      model_parameters,
-      db: {
-        getUserKeyValues: jest.fn(),
-        getUserKey: jest.fn(),
-      } as unknown as BaseInitializeParams['db'],
+  /**
+   * Azure AI Foundry is covered here as the motivating case, not as a
+   * dedicated code path: it needs an `api-key` header and an `api-version`
+   * query param, both of which are the same generic `headers`/`queryParams`
+   * mechanism any OpenAI-compatible-shaped provider can use. There is no
+   * `provider: azureOpenAI` branch to test — this IS the Azure support.
+   */
+  it('passes configured queryParams through to getOpenAIConfig as defaultQuery', async () => {
+    const params = createParams({
+      apiKey: 'sk-system-key',
+      baseURL: 'https://my-resource.openai.azure.com/openai/deployments/phi-4-mini-test',
+      headers: { 'api-key': 'azure-key' },
+      queryParams: { 'api-version': '2024-05-01-preview' },
+    });
+
+    await initializeCustom(params);
+
+    const clientOptions = mockGetOpenAIConfig.mock.calls[0][1] as {
+      headers?: Record<string, string>;
+      defaultQuery?: Record<string, string>;
     };
-  }
+    expect(clientOptions.headers).toEqual({ 'api-key': 'azure-key' });
+    expect(clientOptions.defaultQuery).toEqual({ 'api-version': '2024-05-01-preview' });
+  });
 
-  it('passes azureOpenAIApiDeploymentName/azureOpenAIApiVersion through to getOpenAIConfig', async () => {
-    const params = createAzureParams({
-      provider: 'azureOpenAI',
-      apiKey: 'azure-key',
-      baseURL: 'https://my-resource.cognitiveservices.azure.com/openai',
-      apiVersion: '2024-05-01-preview',
-      models: { default: ['phi-4-mini-test'] },
+  it('withholds configured queryParams when the user supplies the base URL', async () => {
+    const params = createParams({
+      apiKey: 'sk-system-key',
+      baseURL: AuthType.USER_PROVIDED,
+      userBaseURL: 'https://user-controlled.example.com/v1',
+      queryParams: { 'api-version': '2024-05-01-preview' },
     });
 
     await initializeCustom(params);
 
-    expect(mockGetOpenAIConfig).toHaveBeenCalledWith(
-      'azure-key',
-      expect.objectContaining({
-        azure: {
-          azureOpenAIApiDeploymentName: 'phi-4-mini-test',
-          azureOpenAIApiVersion: '2024-05-01-preview',
-        },
-      }),
-      'Azure',
-    );
+    const clientOptions = mockGetOpenAIConfig.mock.calls[0][1] as {
+      defaultQuery?: Record<string, string>;
+    };
+    expect(clientOptions.defaultQuery).toBeUndefined();
   });
 
-  it('sanitizes periods out of the model name for the deployment name', async () => {
-    const params = createAzureParams(
-      {
-        provider: 'azureOpenAI',
-        apiKey: 'azure-key',
-        baseURL: 'https://my-resource.cognitiveservices.azure.com/openai',
-        apiVersion: '2024-05-01-preview',
-        models: { default: ['gpt-4.1-mini'] },
-      },
-      { model: 'gpt-4.1-mini' },
-    );
-
-    await initializeCustom(params);
-
-    expect(mockGetOpenAIConfig).toHaveBeenCalledWith(
-      'azure-key',
-      expect.objectContaining({
-        azure: expect.objectContaining({ azureOpenAIApiDeploymentName: 'gpt-41-mini' }),
-      }),
-      'Azure',
-    );
-  });
-
-  it('throws a clear error when apiVersion is not configured', async () => {
-    const params = createAzureParams({
-      provider: 'azureOpenAI',
-      apiKey: 'azure-key',
-      baseURL: 'https://my-resource.cognitiveservices.azure.com/openai',
-      models: { default: ['phi-4-mini-test'] },
-    });
-
-    await expect(initializeCustom(params)).rejects.toThrow(/apiVersion.*required/i);
-    expect(mockGetOpenAIConfig).not.toHaveBeenCalled();
-  });
-
-  it('does not set azure options when no provider is configured (no regression)', async () => {
-    const params = createAzureParams({
+  it('does not set defaultQuery when no queryParams are configured (no regression)', async () => {
+    const params = createParams({
       apiKey: 'sk-test',
       baseURL: 'https://api.example.com/v1',
       models: { default: ['gpt-4o'] },
@@ -799,10 +765,9 @@ describe('initializeCustom – native Azure OpenAI provider', () => {
 
     await initializeCustom(params);
 
-    expect(mockGetOpenAIConfig).toHaveBeenCalledWith(
-      'sk-test',
-      expect.objectContaining({ azure: undefined }),
-      'Azure',
-    );
+    const clientOptions = mockGetOpenAIConfig.mock.calls[0][1] as {
+      defaultQuery?: Record<string, string>;
+    };
+    expect(clientOptions.defaultQuery).toBeUndefined();
   });
 });

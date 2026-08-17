@@ -843,25 +843,24 @@ export const endpointSchema = baseEndpointSchema.merge(
     modelDisplayLabel: z.string().optional(),
     /**
      * Forces the endpoint to use a provider's native client / request format
-     * instead of the default OpenAI-compatible client. Supports `anthropic`,
-     * for endpoints that speak the Anthropic `/v1/messages` API (Anthropic
-     * itself or Anthropic-compatible gateways), and `azureOpenAI`, for
-     * endpoints that speak Azure's deployment-path + api-version REST
-     * contract (e.g. Azure AI Foundry serverless deployments) rather than a
-     * plain OpenAI-compatible `/chat/completions` route. Omit for
-     * OpenAI-compatible endpoints.
+     * instead of the default OpenAI-compatible client. Only for `anthropic`,
+     * whose `/v1/messages` API is not just an OpenAI-compatible endpoint with
+     * different headers — it needs a different client entirely. Providers
+     * that only need custom headers/query params on the standard
+     * OpenAI-compatible request (e.g. Azure AI Foundry) should use `headers`
+     * and `queryParams` below instead of a dedicated `provider` value — that
+     * keeps new provider support a config change, not a code change. Omit
+     * for OpenAI-compatible endpoints.
      */
-    provider: z
-      .union([z.literal(EModelEndpoint.anthropic), z.literal(EModelEndpoint.azureOpenAI)])
-      .optional(),
-    /**
-     * Required when `provider: azureOpenAI`. The Azure REST API version query
-     * param (e.g. "2024-05-01-preview") appended to every request. Azure
-     * rejects requests missing this param, so there is no sane default to
-     * fall back to — it must be set explicitly per Azure resource.
-     */
-    apiVersion: z.string().optional(),
+    provider: z.literal(EModelEndpoint.anthropic).optional(),
     headers: z.record(z.string()).optional(),
+    /**
+     * Arbitrary query-string parameters appended to every request (e.g.
+     * Azure's required `api-version`). Generic escape hatch for providers
+     * whose REST contract needs something beyond headers/body params —
+     * avoids a dedicated code path per provider.
+     */
+    queryParams: z.record(z.string()).optional(),
     addParams: addParamsSchema.optional(),
     dropParams: z.array(z.string()).optional(),
     customParams: z
