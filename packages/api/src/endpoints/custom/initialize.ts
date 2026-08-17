@@ -13,6 +13,7 @@ import type {
   InitializeResultBase,
   EndpointTokenConfig,
   AnthropicModelOptions,
+  AzureOptions,
 } from '~/types';
 import { getLLMConfig as getAnthropicLLMConfig } from '~/endpoints/anthropic/llm';
 import { extractDefaultParams } from '~/endpoints/openai/llm';
@@ -20,6 +21,7 @@ import { isUserProvided, checkUserKeyExpiry } from '~/utils';
 import { getOpenAIConfig } from '~/endpoints/openai/config';
 import { getScopedTokenConfigKey } from '~/endpoints/keys';
 import { getCustomEndpointConfig } from '~/app/config';
+import { sanitizeModelName } from '~/utils/azure';
 import { fetchModels } from '~/endpoints/models';
 import { validateEndpointURL } from '~/auth';
 import { tokenConfigCache } from '~/cache';
@@ -161,6 +163,47 @@ function buildAnthropicCustomConfig({
     llmConfig: result.llmConfig as InitializeResultBase['llmConfig'],
     tools: result.tools,
     provider: Providers.ANTHROPIC,
+  };
+}
+
+/**
+ * Builds the `azure` options object for a custom endpoint that declares
+ * `provider: azureOpenAI` (e.g. an Azure AI Foundry serverless deployment).
+ *
+ * Unlike the built-in `azureOpenAI` endpoint, a custom endpoint's `baseURL`
+ * already points directly at the target Azure resource (no
+ * `${INSTANCE_NAME}`/`${DEPLOYMENT_NAME}` placeholders to substitute), so
+ * `azureOpenAIApiInstanceName` is intentionally left unset here — only the
+ * deployment name and API version need to be supplied for
+ * `getOpenAIConfig`/`getOpenAILLMConfig` to route the request through Azure's
+ * `/deployments/{name}/...?api-version=...` URL shape instead of the plain
+ * OpenAI-compatible one.
+ *
+ * The deployment name is always the selected model name (sanitized, since
+ * Azure deployment names can't contain periods) — this custom-endpoint path
+ * does not support a deployment name that differs from the model name.
+ *
+ * @throws Error if `apiVersion` is not configured — Azure rejects every
+ * request missing that query param, so there is no safe default to fall back to.
+ */
+function buildAzureCustomOptions({
+  endpoint,
+  endpointConfig,
+  modelOptions,
+}: {
+  endpoint: string;
+  endpointConfig: Partial<TEndpoint>;
+  modelOptions: Record<string, unknown>;
+}): AzureOptions {
+  if (!endpointConfig.apiVersion) {
+    throw new Error(
+      `\`apiVersion\` is required for the "${endpoint}" endpoint when \`provider: azureOpenAI\` is set.`,
+    );
+  }
+
+  return {
+    azureOpenAIApiDeploymentName: sanitizeModelName(String(modelOptions.model ?? '')),
+    azureOpenAIApiVersion: endpointConfig.apiVersion,
   };
 }
 
@@ -333,9 +376,14 @@ export async function initializeCustom({
     });
     options.endpointTokenConfig = endpointTokenConfig;
   } else {
+    const azure =
+      endpointConfig.provider === EModelEndpoint.azureOpenAI
+        ? buildAzureCustomOptions({ endpoint, endpointConfig, modelOptions })
+        : undefined;
     const finalClientOptions = {
       modelOptions,
       ...clientOptions,
+      azure,
     };
     options = getOpenAIConfig(apiKey, finalClientOptions, endpoint);
     if (options != null) {

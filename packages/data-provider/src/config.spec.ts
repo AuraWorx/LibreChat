@@ -57,6 +57,75 @@ describe('bedrockEndpointSchema', () => {
   });
 });
 
+describe('custom endpoint schema — provider/apiVersion', () => {
+  function parseCustomEndpoint(overrides: Record<string, unknown>) {
+    return configSchema.safeParse({
+      version: '1.0',
+      endpoints: {
+        custom: [
+          {
+            name: 'Azure',
+            apiKey: '${AZURE_API_KEY}',
+            baseURL: 'https://my-resource.cognitiveservices.azure.com/openai',
+            models: { default: ['phi-4-mini-test'], fetch: true },
+            ...overrides,
+          },
+        ],
+      },
+    });
+  }
+
+  it('accepts provider: azureOpenAI with apiVersion set', () => {
+    const result = parseCustomEndpoint({
+      provider: 'azureOpenAI',
+      apiVersion: '2024-05-01-preview',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('still accepts provider: anthropic (existing behavior unchanged)', () => {
+    const result = parseCustomEndpoint({ provider: 'anthropic' });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects an arbitrary provider value outside anthropic/azureOpenAI', () => {
+    const result = parseCustomEndpoint({ provider: 'not-a-real-provider' });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('allows provider: azureOpenAI without apiVersion at the schema level (enforced at init time instead)', () => {
+    /**
+     * apiVersion is intentionally schema-optional — `initializeCustom` throws
+     * a clear runtime error if it's missing when provider: azureOpenAI is
+     * set. Enforcing it here too would duplicate that message in two places.
+     */
+    const result = parseCustomEndpoint({ provider: 'azureOpenAI' });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('still rejects an empty models.default array (regression guard)', () => {
+    const result = configSchema.safeParse({
+      version: '1.0',
+      endpoints: {
+        custom: [
+          {
+            name: 'Azure',
+            apiKey: '${AZURE_API_KEY}',
+            baseURL: 'https://my-resource.cognitiveservices.azure.com/openai',
+            models: { default: [], fetch: true },
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe('resolveEndpointType', () => {
   describe('non-agents endpoints', () => {
     it('returns the config type for a custom endpoint', () => {
