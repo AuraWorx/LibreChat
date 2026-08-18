@@ -396,21 +396,38 @@ Here are some examples of correct usage of artifacts:
 
 ---`;
 
+const novaLiteArtifactPrompt = dedent`You MUST wrap all code responses in artifact blocks using this exact format:
+:::artifact{identifier="kebab-case-id" type="MIME-TYPE" title="Short Title"}
+\`\`\`
+YOUR CODE HERE
+\`\`\`
+:::
+MIME types: React component → application/vnd.react, HTML page → text/html, Mermaid diagram → application/vnd.mermaid, Markdown → text/markdown, Any other code → text/plain
+Rules: Always use default export for React components. Use Tailwind. Import hooks from "react". Available libs: lucide-react, recharts, three.js, date-fns, react-day-picker. Import shadcn/ui from /components/ui/name. No external images, use /api/placeholder. NEVER output plain code blocks for substantial code.`;
+
 /**
  * Generates an artifacts prompt based on the endpoint and artifact mode
  * @param params - Configuration parameters
  * @param params.endpoint - The current endpoint
  * @param params.artifacts - The current artifact mode
+ * @param params.model - Optional model ID; non-Claude Bedrock models get the compact prompt
  * @returns The artifacts prompt, or null if mode is CUSTOM
  */
 export function generateArtifactsPrompt(params: {
   endpoint: EModelEndpoint | string;
   artifacts: ArtifactModes;
+  model?: string;
 }): string | null {
-  const { endpoint, artifacts } = params;
+  const { endpoint, artifacts, model } = params;
 
   if (artifacts === ArtifactModes.CUSTOM) {
     return null;
+  }
+
+  // Non-Claude Bedrock models cannot reliably follow the full ~11k-char prompt.
+  // Claude models on Bedrock have 'anthropic' in their model ID.
+  if (endpoint === EModelEndpoint.bedrock && (!model || !model.includes('anthropic'))) {
+    return novaLiteArtifactPrompt;
   }
 
   let prompt = artifactsPrompt;
