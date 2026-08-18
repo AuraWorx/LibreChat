@@ -121,6 +121,7 @@
     "rollup-plugin-typescript2": "^0.37.0",
     "tailwindcss-radix": "^2.8.0",
     "tsdown": "^0.22.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "unrun": "^0.3.1"
   }
 }
