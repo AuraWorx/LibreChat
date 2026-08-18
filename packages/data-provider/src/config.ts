@@ -833,6 +833,13 @@ export const endpointSchema = baseEndpointSchema.merge(
       ).join(', ')}`,
     }),
     apiKey: z.string(),
+    /**
+     * May contain the placeholder `{{LIBRECHAT_MODEL}}`, substituted with the
+     * selected model name per request. Lets one endpoint entry list several
+     * models that each live at their own URL path (e.g. Azure, where each
+     * deployment is a distinct path segment) instead of requiring a separate
+     * endpoint per model.
+     */
     baseURL: z.string(),
     models: z.object({
       default: z.array(modelItemSchema).min(1),

@@ -219,7 +219,17 @@ export async function initializeCustom({
   }
 
   const apiKey = userProvidesKey || userProvidesURL ? userValues?.apiKey : CUSTOM_API_KEY;
-  const baseURL = userProvidesURL ? userValues?.baseURL : CUSTOM_BASE_URL;
+  const rawBaseURL = userProvidesURL ? userValues?.baseURL : CUSTOM_BASE_URL;
+  /**
+   * Generic placeholder so one custom endpoint entry can list several models
+   * that each live at their own URL path (e.g. Azure, where each deployment
+   * is a distinct path segment) without a fixed, single-model baseURL. Not
+   * provider-specific — any endpoint whose URL varies per model can use it.
+   */
+  const baseURL =
+    rawBaseURL && model_parameters?.model
+      ? rawBaseURL.replace(/\{\{LIBRECHAT_MODEL\}\}/g, String(model_parameters.model))
+      : rawBaseURL;
 
   if ((userProvidesKey || userProvidesURL) && !apiKey) {
     throw new Error(

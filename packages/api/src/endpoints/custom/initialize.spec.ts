@@ -53,6 +53,7 @@ function createParams(overrides: {
   headers?: Record<string, string>;
   queryParams?: Record<string, string>;
   models?: Record<string, unknown>;
+  modelName?: string;
 }): BaseInitializeParams {
   const { apiKey = 'sk-test-key', baseURL = 'https://api.example.com/v1' } = overrides;
 
@@ -78,7 +79,7 @@ function createParams(overrides: {
       config: {},
     } as unknown as BaseInitializeParams['req'],
     endpoint: 'test-custom',
-    model_parameters: { model: 'gpt-4' },
+    model_parameters: { model: overrides.modelName ?? 'gpt-4' },
     db,
   };
 }
@@ -769,5 +770,62 @@ describe('initializeCustom – generic queryParams passthrough', () => {
       defaultQuery?: Record<string, string>;
     };
     expect(clientOptions.defaultQuery).toBeUndefined();
+  });
+});
+
+describe('initializeCustom – {{LIBRECHAT_MODEL}} baseURL placeholder', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockGetOpenAIConfig.mockReturnValue({
+      llmConfig: { model: 'test-model' },
+      configOptions: {},
+    });
+  });
+
+  /**
+   * Lets one custom endpoint entry list several models that each live at a
+   * different URL path (e.g. Azure, where each deployment is its own path
+   * segment) instead of requiring a separate endpoint per model. Generic —
+   * not gated behind any provider value.
+   */
+  it('substitutes the selected model name into a templated baseURL', async () => {
+    const params = createParams({
+      apiKey: 'sk-test',
+      baseURL: 'https://my-resource.openai.azure.com/openai/deployments/{{LIBRECHAT_MODEL}}',
+      modelName: 'phi-4-mini-test',
+    });
+
+    await initializeCustom(params);
+
+    const clientOptions = mockGetOpenAIConfig.mock.calls[0][1] as { reverseProxyUrl?: string };
+    expect(clientOptions.reverseProxyUrl).toBe(
+      'https://my-resource.openai.azure.com/openai/deployments/phi-4-mini-test',
+    );
+  });
+
+  it('substitutes every occurrence when the placeholder appears more than once', async () => {
+    const params = createParams({
+      apiKey: 'sk-test',
+      baseURL: 'https://example.com/{{LIBRECHAT_MODEL}}/v1/{{LIBRECHAT_MODEL}}/chat',
+      modelName: 'gpt-4o',
+    });
+
+    await initializeCustom(params);
+
+    const clientOptions = mockGetOpenAIConfig.mock.calls[0][1] as { reverseProxyUrl?: string };
+    expect(clientOptions.reverseProxyUrl).toBe('https://example.com/gpt-4o/v1/gpt-4o/chat');
+  });
+
+  it('leaves a baseURL without the placeholder untouched (no regression)', async () => {
+    const params = createParams({
+      apiKey: 'sk-test',
+      baseURL: 'https://api.example.com/v1',
+      modelName: 'gpt-4o',
+    });
+
+    await initializeCustom(params);
+
+    const clientOptions = mockGetOpenAIConfig.mock.calls[0][1] as { reverseProxyUrl?: string };
+    expect(clientOptions.reverseProxyUrl).toBe('https://api.example.com/v1');
   });
 });
