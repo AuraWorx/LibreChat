@@ -124,3 +124,19 @@ aura_directories:
   - packages/client/
   - api/jest.config.js
   - client/package.json
+
+  # api/server/controllers/UserController.js and its two test files: genuine
+  # bug fixes surfaced by the reconciliation, not reconciliation churn itself.
+  # packages/api's own storage/s3/index.ts was missing `export * from
+  # './images'`, so S3ImageService never reached its public API surface —
+  # api/server/services/Files/strategies.js does `new S3ImageService(...)`
+  # at module load time, so every controller that transitively requires it
+  # crashed. Separately, the reconciled packages/data-provider added
+  # ResourceType.SKILL, which had no per-user cleanup call in
+  # UserController.js even though packages/data-schemas already exposed
+  # deleteUserSkills via createMethods. One line added to the controller,
+  # plus matching updates to its two test files (mock + coverage map).
+  # Tracks: AuraWorx/LibreChat#9
+  - api/server/controllers/UserController.js
+  - api/server/controllers/__tests__/deleteUser.spec.js
+  - api/server/controllers/__tests__/deleteUserResourceCoverage.spec.js
