@@ -140,3 +140,44 @@ aura_directories:
   - api/server/controllers/UserController.js
   - api/server/controllers/__tests__/deleteUser.spec.js
   - api/server/controllers/__tests__/deleteUserResourceCoverage.spec.js
+
+  # Remaining Tests: api failures, each a genuine gap between an untouched
+  # api/server/ or api/strategies/ file and the reconciled packages/*:
+  # - api/server/controllers/UserController.spec.js: same deleteUserSkills
+  #   mock gap as deleteUser.spec.js above, in a second test file for the
+  #   same controller.
+  # - api/strategies/openIdJwtStrategy.js(.spec.js): the reconciled
+  #   packages/api's findOpenIDUser now does issuer-scoped primary lookups,
+  #   requiring callers to pass openidIssuer (derived via the already-
+  #   exported getOpenIdIssuer helper). Without it every JWT-based OIDC
+  #   login skipped straight to the email-only fallback lookup. Scoped
+  #   narrowly to just this parameter — the feature branch's version also
+  #   bundles new issuer/audience allowlist validation, intentionally left
+  #   out here as a separate, bigger change needing its own review.
+  # - api/server/controllers/agents/client.test.js: two stale-test fixes —
+  #   memory context is intentionally placed on agent.additional_instructions
+  #   by applyContextToAgent (consumed downstream in packages/api's run.ts),
+  #   not agent.instructions; and the test's mock MCP tools were constructed
+  #   via @langchain/core's DynamicStructuredTool while extractMCPServers
+  #   checks instanceof against @librechat/agents/langchain/tools's
+  #   re-export, a different module reference for the same class.
+  # - api/server/routes/__tests__/mcp.spec.js: redactServerSecrets() now
+  #   omits url unless the caller passes {canEdit: true}; the untouched
+  #   controller never does, so url is correctly redacted everywhere today.
+  #   Updated assertions to match that real, current behavior rather than
+  #   porting the feature branch's much larger ACL-based canEdit computation
+  #   (ties into resource permissions / capability checks) — that's a
+  #   separate, bigger change warranting its own review. Also fixed a
+  #   hardcoded 3-minute "stale" duration to use the real PENDING_STALE_MS
+  #   constant (default changed from whatever main assumed to 10 minutes).
+  # - api/package.json: added traverse@0.6.8 as an explicit dependency.
+  #   api/config/parsers.js requires it directly, but it was only ever
+  #   present as an incidental transitive dependency on main (never
+  #   declared), and the reconciled dependency tree dropped it.
+  # Tracks: AuraWorx/LibreChat#9
+  - api/server/controllers/UserController.spec.js
+  - api/strategies/openIdJwtStrategy.js
+  - api/strategies/openIdJwtStrategy.spec.js
+  - api/server/controllers/agents/client.test.js
+  - api/server/routes/__tests__/mcp.spec.js
+  - api/package.json
