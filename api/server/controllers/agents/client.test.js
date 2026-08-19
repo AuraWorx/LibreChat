@@ -1243,7 +1243,11 @@ describe('AgentClient - titleConvo', () => {
         '# MCP Server Instructions\n\nTest MCP instructions here',
       );
 
-      const { DynamicStructuredTool } = require('@langchain/core/tools');
+      // Must match the DynamicStructuredTool reference extractMCPServers checks
+      // instanceof against (packages/api/src/agents/context.ts imports it from
+      // @librechat/agents/langchain/tools, a different module instance than
+      // @langchain/core/tools even though they're semantically the same class).
+      const { DynamicStructuredTool } = require('@librechat/agents/langchain/tools');
 
       // Create mock MCP tools with the delimiter pattern
       const mockMCPTool1 = new DynamicStructuredTool({
@@ -1963,15 +1967,17 @@ describe('AgentClient - titleConvo', () => {
 
       expect(client.useMemory).toHaveBeenCalled();
 
-      // Verify primary agent has its configured instructions (not from buildOptions) and memory context
+      // Verify primary agent has its configured instructions (not from buildOptions) and memory context.
+      // Memory is part of the shared run context, which applyContextToAgent places on
+      // additional_instructions (consumed separately downstream), not instructions.
       expect(client.options.agent.instructions).toContain('Primary agent instructions');
-      expect(client.options.agent.instructions).toContain(memoryContent);
+      expect(client.options.agent.additional_instructions).toContain(memoryContent);
 
       expect(parallelAgent1.instructions).toContain('Parallel agent 1 instructions');
-      expect(parallelAgent1.instructions).toContain(memoryContent);
+      expect(parallelAgent1.additional_instructions).toContain(memoryContent);
 
       expect(parallelAgent2.instructions).toContain('Parallel agent 2 instructions');
-      expect(parallelAgent2.instructions).toContain(memoryContent);
+      expect(parallelAgent2.additional_instructions).toContain(memoryContent);
     });
 
     it('should not modify parallel agents when no memory context is available', async () => {
@@ -2033,7 +2039,7 @@ describe('AgentClient - titleConvo', () => {
         additional_instructions: null,
       });
 
-      expect(parallelAgentNoInstructions.instructions).toContain(memoryContent);
+      expect(parallelAgentNoInstructions.additional_instructions).toContain(memoryContent);
     });
 
     it('should not modify agentConfigs when none exist', async () => {
@@ -2059,7 +2065,7 @@ describe('AgentClient - titleConvo', () => {
         }),
       ).resolves.not.toThrow();
 
-      expect(client.options.agent.instructions).toContain(memoryContent);
+      expect(client.options.agent.additional_instructions).toContain(memoryContent);
     });
 
     it('should handle empty agentConfigs map', async () => {
@@ -2085,7 +2091,7 @@ describe('AgentClient - titleConvo', () => {
         }),
       ).resolves.not.toThrow();
 
-      expect(client.options.agent.instructions).toContain(memoryContent);
+      expect(client.options.agent.additional_instructions).toContain(memoryContent);
     });
   });
 

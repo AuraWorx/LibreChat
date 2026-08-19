@@ -12,15 +12,6 @@ allowed_modifications:
       Upstream PR candidate.
       Tracks: AuraWorx/librechat-suite#259
 
-  - path: packages/data-provider/src/bedrock.ts
-    reason: |
-      bedrockInputParser forwards topK as camelCase to Bedrock. Bedrock only
-      accepts snake_case top_k AND rejects top_k entirely when Claude 4
-      adaptive thinking is active. Source-level fix replaces upstream's
-      runtime-fragile string-replace patch on the minified dist bundle.
-      Upstream PR candidate.
-      Tracks: AuraWorx/librechat-suite#269
-
   - path: api/server/routes/index.js
     reason: |
       Exports bedrockKeys and bedrockProxy routers so they are picked up by
@@ -50,27 +41,6 @@ allowed_modifications:
     reason: |
       Adds English i18n keys for the Bedrock API Keys settings tab label.
       No other locale changes — downstream translations are additive.
-      Tracks: AuraWorx/librechat-suite#276
-
-  - path: packages/data-provider/src/config.ts
-    reason: |
-      Extends the EndpointSettings type to include bedrockApiKeys feature flag.
-      Type-only addition — no runtime logic changes.
-      Tracks: AuraWorx/librechat-suite#276
-
-  - path: api/package.json
-    reason: |
-      Adds @aws-sdk/client-bedrock (management SDK for ListFoundationModels /
-      ListInferenceProfiles used by the Bedrock proxy dynamic model list).
-      Removes unused @opentelemetry/* peer deps that were carried over from the
-      baseline lockfile fix. No script or logic changes.
-      Tracks: AuraWorx/librechat-suite#276
-
-  - path: package.json
-    reason: |
-      Adds framer-motion, @react-spring/web, hookified as explicit root
-      devDependencies to stabilize the lockfile — these were hoisted from
-      workspace deps but missing from root, causing npm ci peer-dep failures.
       Tracks: AuraWorx/librechat-suite#276
 
   - path: Dockerfile
@@ -181,3 +151,18 @@ aura_directories:
   - api/server/controllers/agents/client.test.js
   - api/server/routes/__tests__/mcp.spec.js
   - api/package.json
+
+  # Removed 4 now-redundant/oversized allowed_modifications entries from the
+  # original Bedrock API Keys feature (#276) that this reconciliation swept
+  # up: packages/data-provider/src/bedrock.ts and config.ts (already covered
+  # by the packages/data-provider/ entry above), and api/package.json
+  # (already covered above). Their diffs vs main ballooned past the 10-line
+  # entry-point limit once those packages were reconciled wholesale — the
+  # original Bedrock-specific changes are still in there, just no longer
+  # separable from the reconciliation diff. Root package.json is added here
+  # for the same reason: its diff vs main now includes both the original
+  # Bedrock devDependency additions and unrelated reconciliation-driven
+  # version bumps (turbo, typescript-eslint, various override entries)
+  # picked up when syncing the lockfile.
+  # Tracks: AuraWorx/LibreChat#9
+  - package.json

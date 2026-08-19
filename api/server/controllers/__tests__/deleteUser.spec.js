@@ -67,6 +67,7 @@ jest.mock('~/models', () => ({
   removeUserFromAllGroups: jest.fn(),
   deleteAclEntries: jest.fn(),
   getSoleOwnedResourceIds: jest.fn().mockResolvedValue([]),
+  deleteUserSkills: jest.fn(),
 }));
 
 jest.mock('~/server/services/PluginService', () => ({
