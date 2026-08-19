@@ -23,6 +23,7 @@ jest.mock('@librechat/data-schemas', () => ({
 jest.mock('@librechat/api', () => ({
   isEnabled: jest.fn(() => false),
   findOpenIDUser: jest.fn(),
+  getOpenIdIssuer: jest.fn(),
   math: jest.fn((val, fallback) => fallback),
 }));
 jest.mock('~/models', () => ({
@@ -41,7 +42,7 @@ jest.mock('~/cache/getLogStores', () =>
   jest.fn().mockReturnValue({ get: jest.fn(), set: jest.fn() }),
 );
 
-const { findOpenIDUser } = require('@librechat/api');
+const { findOpenIDUser, getOpenIdIssuer } = require('@librechat/api');
 const openIdJwtLogin = require('./openIdJwtStrategy');
 const { findUser, updateUser } = require('~/models');
 
@@ -209,6 +210,7 @@ describe('openIdJwtStrategy – OPENID_EMAIL_CLAIM', () => {
     // Use real findOpenIDUser so it delegates to the findUser mock
     const realFindOpenIDUser = jest.requireActual('@librechat/api').findOpenIDUser;
     findOpenIDUser.mockImplementation(realFindOpenIDUser);
+    getOpenIdIssuer.mockReturnValue('https://test-issuer.example.com');
 
     findUser.mockResolvedValue(null);
     updateUser.mockResolvedValue({});
@@ -229,7 +231,7 @@ describe('openIdJwtStrategy – OPENID_EMAIL_CLAIM', () => {
       role: SystemRoles.USER,
     };
     findUser.mockImplementation(async (query) => {
-      if (query.$or && query.$or.some((c) => c.openidId === payload.sub)) {
+      if (query.openidId === payload.sub) {
         return existingUser;
       }
       return null;
@@ -239,9 +241,7 @@ describe('openIdJwtStrategy – OPENID_EMAIL_CLAIM', () => {
     await invokeVerify(req, payload);
 
     expect(findUser).toHaveBeenCalledWith(
-      expect.objectContaining({
-        $or: expect.arrayContaining([{ openidId: payload.sub }]),
-      }),
+      expect.objectContaining({ openidId: payload.sub }),
     );
   });
 
@@ -253,9 +253,7 @@ describe('openIdJwtStrategy – OPENID_EMAIL_CLAIM', () => {
     const { user } = await invokeVerify(req, payload);
 
     expect(findUser).toHaveBeenCalledTimes(2);
-    expect(findUser.mock.calls[0][0]).toMatchObject({
-      $or: expect.arrayContaining([{ openidId: payload.sub }]),
-    });
+    expect(findUser.mock.calls[0][0]).toMatchObject({ openidId: payload.sub });
     expect(findUser.mock.calls[1][0]).toEqual({ email: 'test@corp.example.com' });
     expect(user).toBe(false);
   });
