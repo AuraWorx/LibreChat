@@ -240,9 +240,7 @@ describe('openIdJwtStrategy – OPENID_EMAIL_CLAIM', () => {
     const req = { headers: { authorization: 'Bearer tok' }, session: {} };
     await invokeVerify(req, payload);
 
-    expect(findUser).toHaveBeenCalledWith(
-      expect.objectContaining({ openidId: payload.sub }),
-    );
+    expect(findUser).toHaveBeenCalledWith(expect.objectContaining({ openidId: payload.sub }));
   });
 
   it('should use OPENID_EMAIL_CLAIM when set for email lookup', async () => {
