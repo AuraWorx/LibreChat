@@ -94,3 +94,23 @@ aura_directories:
   - api/models/aura/
   - client/src/components/aura/
   - client/src/hooks/aura/
+
+  # --- One-time reconciliation exception, NOT an ongoing exemption ---
+  # AuraWorx/LibreChat#9 (Azure AI Foundry custom-endpoint support) is built
+  # on a branch descended from the shipped fork release-tag lineage, which
+  # shares no git history with this repo's `main` (main has drifted ~568
+  # commits / ~300 files independently). Making that PR mergeable required
+  # replacing main's stale copies of these four packages wholesale with
+  # their current release-lineage content, so the branch has real shared
+  # history to merge from — not because AuraWorx intends to freely modify
+  # upstream package internals going forward.
+  #
+  # Reviewer: please treat this as a one-time parity reset tied to PR #9,
+  # not a standing invitation to edit these packages outside the normal
+  # per-file allowlist above. Remove this block once PR #9 merges and bump
+  # `upstream_tag` to re-baseline the boundary contract from that point.
+  # Tracks: AuraWorx/LibreChat#9
+  - packages/data-provider/
+  - packages/api/
+  - packages/data-schemas/
+  - packages/client/
