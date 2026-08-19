@@ -105,12 +105,22 @@ aura_directories:
   # history to merge from — not because AuraWorx intends to freely modify
   # upstream package internals going forward.
   #
+  # api/jest.config.js and client/package.json are listed here rather than
+  # in allowed_modifications above because they're byproducts of the same
+  # reconciliation (syncing Jest's esModules transform list and removing
+  # unused deps pulled in by the client/package.json sync) and exceed that
+  # list's 10-added-line entry-point limit — they're reconciliation
+  # artifacts, not small isolated fork customizations.
+  #
   # Reviewer: please treat this as a one-time parity reset tied to PR #9,
-  # not a standing invitation to edit these packages outside the normal
-  # per-file allowlist above. Remove this block once PR #9 merges and bump
-  # `upstream_tag` to re-baseline the boundary contract from that point.
+  # not a standing invitation to edit these files/packages outside the
+  # normal per-file allowlist above. Remove this block once PR #9 merges
+  # and bump `upstream_tag` to re-baseline the boundary contract from that
+  # point.
   # Tracks: AuraWorx/LibreChat#9
   - packages/data-provider/
   - packages/api/
   - packages/data-schemas/
   - packages/client/
+  - api/jest.config.js
+  - client/package.json
