@@ -552,11 +552,12 @@ describe('MCP Routes', () => {
       });
 
       it('should reject when PENDING flow is stale (older than PENDING_STALE_MS)', async () => {
+        const { PENDING_STALE_MS } = require('@librechat/api');
         const flowId = 'test-user-id:test-server';
         const mockFlowManager = {
           getFlowState: jest.fn().mockResolvedValue({
             status: 'PENDING',
-            createdAt: Date.now() - 3 * 60 * 1000,
+            createdAt: Date.now() - PENDING_STALE_MS - 1000,
           }),
         };
 
@@ -1884,16 +1885,17 @@ describe('MCP Routes', () => {
       const response = await request(app).get('/api/mcp/servers');
 
       expect(response.status).toBe(200);
+      // redactServerSecrets omits url unless canEdit is passed; the list route doesn't pass it.
       expect(response.body['server-1']).toMatchObject({
         type: 'sse',
-        url: 'http://server1.com/sse',
         title: 'Server 1',
       });
+      expect(response.body['server-1'].url).toBeUndefined();
       expect(response.body['server-2']).toMatchObject({
         type: 'sse',
-        url: 'http://server2.com/sse',
         title: 'Server 2',
       });
+      expect(response.body['server-2'].url).toBeUndefined();
       expect(response.body['server-1'].headers).toBeUndefined();
       expect(response.body['server-2'].headers).toBeUndefined();
       expect(mockResolveAllMcpConfigs).toHaveBeenCalledWith(
@@ -1955,7 +1957,8 @@ describe('MCP Routes', () => {
       expect(response.status).toBe(201);
       expect(response.body.serverName).toBe('test-sse-server');
       expect(response.body.type).toBe('sse');
-      expect(response.body.url).toBe('https://mcp-server.example.com/sse');
+      // redactServerSecrets omits url unless canEdit is passed; the create route doesn't pass it.
+      expect(response.body.url).toBeUndefined();
       expect(response.body.title).toBe('Test SSE Server');
       expect(mockRegistryInstance.addServer).toHaveBeenCalledWith(
         'temp_server_name',
@@ -2112,7 +2115,8 @@ describe('MCP Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.type).toBe('sse');
-      expect(response.body.url).toBe('https://mcp-server.example.com/sse');
+      // redactServerSecrets omits url unless canEdit is passed; the get route doesn't pass it.
+      expect(response.body.url).toBeUndefined();
       expect(response.body.title).toBe('Test Server');
       expect(mockRegistryInstance.getServerConfig).toHaveBeenCalledWith(
         'test-server',
@@ -2180,7 +2184,8 @@ describe('MCP Routes', () => {
 
       expect(response.status).toBe(200);
       expect(response.body.type).toBe('sse');
-      expect(response.body.url).toBe('https://updated-mcp-server.example.com/sse');
+      // redactServerSecrets omits url unless canEdit is passed; the update route doesn't pass it.
+      expect(response.body.url).toBeUndefined();
       expect(response.body.title).toBe('Updated Server');
       expect(mockRegistryInstance.updateServer).toHaveBeenCalledWith(
         'test-server',
