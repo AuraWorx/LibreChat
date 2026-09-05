@@ -12,11 +12,17 @@ jobs:
       matrix:
         include:
           - target: api-build
+            context: .
             file: Dockerfile.multi
             image_name: librechat-api
           - target: node
+            context: .
             file: Dockerfile
             image_name: librechat
+          - target: app
+            context: code-interpreter
+            file: code-interpreter/Dockerfile
+            image_name: librechat-code-interpreter
 
     steps:
       # Check out the repository
@@ -55,7 +61,7 @@ jobs:
       - name: Build and push Docker images
         uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ${{ matrix.context }}
           file: ${{ matrix.file }}
           push: true
           tags: |
