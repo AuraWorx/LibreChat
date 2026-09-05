@@ -1,0 +1,2164 @@
+"""
+LibreChat request/response contract tests.
+
+These are fast in-process checks for the wire contract only. They intentionally
+mock the orchestrator and are not the source of truth for end-to-end client
+compatibility; the live replay coverage lives under tests/functional/.
+"""
+
+import pytest
+from fastapi.testclient import TestClient
+from unittest.mock import AsyncMock, MagicMock, patch
+from datetime import datetime, timezone, timedelta
+import concurrent.futures
+import io
+import json
+
+from src.main import app
+from src.models.exec import ExecResponse, FileRef
+from src.models.files import FileInfo
+from src.models.session import Session, SessionStatus
+
+
+@pytest.fixture
+def client():
+    """Create test client."""
+    return TestClient(app)
+
+
+@pytest.fixture
+def auth_headers():
+    """Provide authentication headers for tests."""
+    return {"x-api-key": "test-api-key-for-testing-12345"}
+
+
+@pytest.fixture
+def mock_exec_response():
+    """Standard successful execution response."""
+    return ExecResponse(
+        session_id="test-session-123", stdout="output\n", stderr="", files=[]
+    )
+
+
+# =============================================================================
+# LIBRECHAT EXEC REQUEST FORMAT
+# =============================================================================
+
+
+class TestLibreChatExecRequest:
+    """Test /exec request format exactly as LibreChat sends it.
+
+    From CodeExecutor.ts, LibreChat sends:
+    - lang: 'py' | 'js' | 'ts' | ... (required)
+    - code: string (required)
+    - session_id?: string (for file access)
+    - args?: string[] (array only, not string)
+    - user_id?: string
+    - files?: Array<{id, session_id, name}>
+    """
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_librechat_minimal_request(
+        self, mock_execute, client, auth_headers, mock_exec_response
+    ):
+        """
+        Test LibreChat minimal request format.
+
+        LibreChat sends: {"code": "...", "lang": "py"}
+        """
+        mock_execute.return_value = mock_exec_response
+
+        request = {"code": "print('hello')", "lang": "py"}
+
+        response = client.post("/exec", json=request, headers=auth_headers)
+        assert response.status_code == 200
+        mock_execute.assert_called_once()
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_librechat_request_with_user_id(
+        self, mock_execute, client, auth_headers, mock_exec_response
+    ):
+        """
+        Test LibreChat request with user_id for tracking.
+
+        LibreChat sends: {"code": "...", "lang": "py", "user_id": "user_..."}
+        """
+        mock_execute.return_value = mock_exec_response
+
+        request = {"code": "print('hello')", "lang": "py", "user_id": "user_xyz789"}
+
+        response = client.post("/exec", json=request, headers=auth_headers)
+        assert response.status_code == 200
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_librechat_request_with_files(
+        self, mock_execute, client, auth_headers, mock_exec_response
+    ):
+        """
+        Test LibreChat request with file references.
+
+        LibreChat sends files as array of {id, session_id, name}.
+        """
+        mock_execute.return_value = mock_exec_response
+
+        request = {
+            "code": "with open('data.csv') as f: print(f.read())",
+            "lang": "py",
+            "entity_id": "asst_test",
+            "files": [
+                {
+                    "id": "file-svc-abc123",
+                    "storage_session_id": "sess_xyz789",
+                    "name": "data.csv",
+                }
+            ],
+        }
+
+        response = client.post("/exec", json=request, headers=auth_headers)
+        assert response.status_code == 200
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_librechat_request_with_multiple_files(
+        self, mock_execute, client, auth_headers, mock_exec_response
+    ):
+        """Test LibreChat request with multiple file references."""
+        mock_execute.return_value = mock_exec_response
+
+        request = {
+            "code": "import os; print(os.listdir('.'))",
+            "lang": "py",
+            "files": [
+                {"id": "file-1", "storage_session_id": "sess-1", "name": "file1.txt"},
+                {"id": "file-2", "storage_session_id": "sess-2", "name": "file2.txt"},
+                {"id": "file-3", "storage_session_id": "sess-3", "name": "file3.csv"},
+            ],
+        }
+
+        response = client.post("/exec", json=request, headers=auth_headers)
+        assert response.status_code == 200
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_librechat_args_as_array(
+        self, mock_execute, client, auth_headers, mock_exec_response
+    ):
+        """
+        Test LibreChat args field format.
+
+        LibreChat sends args as string[] array only (from @librechat/agents CodeExecutor.ts).
+        The Zod schema defines: args: z.array(z.string()).optional()
+        """
+        mock_execute.return_value = mock_exec_response
+
+        request = {
+            "code": "print('test')",
+            "lang": "py",
+            "args": ["arg1", "arg2", "arg3"],
+        }
+
+        response = client.post("/exec", json=request, headers=auth_headers)
+        assert response.status_code == 200
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_librechat_request_with_session_id(
+        self, mock_execute, client, auth_headers, mock_exec_response
+    ):
+        """
+        Test LibreChat request with session_id for file and Python state continuity.
+
+        LibreChat sends session_id to access files from previous executions.
+        From CodeExecutor.ts: "Session ID from a previous response to access generated files."
+        In this backend, Python also reuses interpreter state when the session
+        is reused. Files are loaded into /mnt/data/ and are READ-ONLY.
+        """
+        mock_execute.return_value = mock_exec_response
+
+        request = {
+            "code": "import os; print(os.listdir('/mnt/data'))",
+            "lang": "py",
+            "session_id": "prev-session-abc123",
+        }
+
+        response = client.post("/exec", json=request, headers=auth_headers)
+        assert response.status_code == 200
+        forwarded_request = mock_execute.call_args.args[0]
+        assert forwarded_request.session_id == "prev-session-abc123"
+
+
+# =============================================================================
+# LIBRECHAT EXEC RESPONSE FORMAT
+# =============================================================================
+
+
+class TestLibreChatExecResponse:
+    """Test /exec response format exactly as LibreChat expects it.
+
+    From ExecuteResult type in @librechat/agents:
+    - session_id: string (required)
+    - stdout: string (required)
+    - stderr: string (required)
+    - files?: Array<{id, name, path?}>
+    """
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_response_has_required_fields(self, mock_execute, client, auth_headers):
+        """
+        Test LibreChat response has required fields: session_id, files, stdout, stderr.
+
+        LibreChat reads these 4 fields from the response (from @librechat/agents ExecuteResult type).
+        """
+        mock_execute.return_value = ExecResponse(
+            session_id="resp-session-123", stdout="test output\n", stderr="", files=[]
+        )
+
+        response = client.post(
+            "/exec", json={"code": "print('test')", "lang": "py"}, headers=auth_headers
+        )
+
+        data = response.json()
+
+        # Must have these four fields
+        assert "session_id" in data
+        assert "files" in data
+        assert "stdout" in data
+        assert "stderr" in data
+
+        # Verify types
+        assert isinstance(data["session_id"], str)
+        assert isinstance(data["files"], list)
+        assert isinstance(data["stdout"], str)
+        assert isinstance(data["stderr"], str)
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_stdout_ends_with_newline(self, mock_execute, client, auth_headers):
+        """
+        Test that stdout ends with newline.
+
+        LibreChat UI expects this for proper display.
+        """
+        mock_execute.return_value = ExecResponse(
+            session_id="resp-session-123", stdout="hello\n", stderr="", files=[]
+        )
+
+        response = client.post(
+            "/exec", json={"code": "print('hello')", "lang": "py"}, headers=auth_headers
+        )
+
+        data = response.json()
+        assert data["stdout"].endswith(
+            "\n"
+        ), "stdout must end with newline for LibreChat"
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_files_array_format(self, mock_execute, client, auth_headers):
+        """
+        Test generated files format: {id, name, path?}
+
+        LibreChat expects: {"id": "...", "name": "...", "path": "..."}
+        """
+        mock_execute.return_value = ExecResponse(
+            session_id="resp-session-123",
+            stdout="",
+            stderr="",
+            files=[FileRef(id="gen-file-abc", name="output.png", path="/output.png")],
+        )
+
+        response = client.post(
+            "/exec", json={"code": "generate image", "lang": "py"}, headers=auth_headers
+        )
+
+        data = response.json()
+        assert len(data["files"]) == 1
+
+        file_ref = data["files"][0]
+        # Required fields for LibreChat
+        assert "id" in file_ref, "File must have 'id' field"
+        assert "name" in file_ref, "File must have 'name' field"
+        # path is optional but typically included
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_empty_stderr_on_success(self, mock_execute, client, auth_headers):
+        """Test stderr is empty string on successful execution."""
+        mock_execute.return_value = ExecResponse(
+            session_id="resp-session-123", stdout="ok\n", stderr="", files=[]
+        )
+
+        response = client.post(
+            "/exec", json={"code": "print('ok')", "lang": "py"}, headers=auth_headers
+        )
+
+        data = response.json()
+        assert data["stderr"] == "", "stderr should be empty on success"
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_stderr_populated_on_error(self, mock_execute, client, auth_headers):
+        """Test stderr contains error message on failure."""
+        mock_execute.return_value = ExecResponse(
+            session_id="resp-session-123",
+            stdout="",
+            stderr="Traceback: Exception: error\n",
+            files=[],
+        )
+
+        response = client.post(
+            "/exec",
+            json={"code": "raise Exception('error')", "lang": "py"},
+            headers=auth_headers,
+        )
+
+        data = response.json()
+        assert len(data["stderr"]) > 0, "stderr should contain the error"
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_session_id_is_string(self, mock_execute, client, auth_headers):
+        """Test session_id is always a non-empty string."""
+        mock_execute.return_value = ExecResponse(
+            session_id="resp-session-123", stdout="", stderr="", files=[]
+        )
+
+        response = client.post(
+            "/exec", json={"code": "pass", "lang": "py"}, headers=auth_headers
+        )
+
+        data = response.json()
+        assert isinstance(data["session_id"], str)
+        assert len(data["session_id"]) > 0
+
+
+# =============================================================================
+# LIBRECHAT FILE UPLOAD FORMAT
+# =============================================================================
+
+
+class TestLibreChatFileUpload:
+    """Test /upload format exactly as LibreChat sends it.
+
+    LibreChat uploads files via POST /upload with:
+    - 'file' field (singular) containing the file
+    - 'entity_id' field (optional)
+    - Headers: X-API-Key, User-Id, User-Agent: 'LibreChat/1.0'
+
+    From crud.js: form.append('file', stream, filename)
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup_mocks(self):
+        """Set up mocks."""
+        mock_file_service = AsyncMock()
+        mock_file_service.store_uploaded_file.return_value = "lc-file-123"
+        mock_file_service.validate_uploads = MagicMock(return_value=None)
+
+        mock_session_service = AsyncMock()
+        mock_session_service.create_session.return_value = Session(
+            session_id="upload-session-123",
+            status=SessionStatus.ACTIVE,
+            created_at=datetime.now(timezone.utc),
+            last_activity=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            metadata={},
+        )
+
+        from src.dependencies.services import get_file_service, get_session_service
+
+        app.dependency_overrides[get_file_service] = lambda: mock_file_service
+        app.dependency_overrides[get_session_service] = lambda: mock_session_service
+
+        yield
+
+        app.dependency_overrides.clear()
+
+    def test_multipart_upload_format(self, client, auth_headers):
+        """
+        Test LibreChat multipart upload format.
+
+        LibreChat sends: multipart/form-data with 'file' (singular) field and 'entity_id'.
+        From crud.js: form.append('file', stream, filename)
+        """
+        # LibreChat uses 'file' (singular), not 'files'
+        files = {
+            "file": ("document.pdf", io.BytesIO(b"PDF content"), "application/pdf")
+        }
+        data = {"entity_id": "asst_librechat"}
+
+        response = client.post("/upload", files=files, data=data, headers=auth_headers)
+
+        assert response.status_code == 200
+        result = response.json()
+
+        # API returns {message, storage_session_id, files: [{fileId, filename}]}
+        # LibreChat checks: if (result.message !== 'success') throw error
+        assert result.get("message") == "success", "LibreChat expects message='success'"
+        assert "files" in result
+        assert len(result["files"]) == 1
+        assert "storage_session_id" in result
+
+        file_info = result["files"][0]
+        assert "fileId" in file_info
+        assert "filename" in file_info
+
+    def test_upload_response_has_storage_session_id(self, client, auth_headers):
+        """Test that upload response includes a storage_session_id."""
+        entity_id = "asst_specific_entity"
+        # LibreChat uses 'file' (singular)
+        files = {"file": ("test.txt", io.BytesIO(b"content"), "text/plain")}
+        data = {"entity_id": entity_id}
+
+        response = client.post("/upload", files=files, data=data, headers=auth_headers)
+
+        result = response.json()
+        assert "storage_session_id" in result
+        assert len(result["storage_session_id"]) > 0
+
+    def test_librechat_upload_with_user_id_header(self, client, auth_headers):
+        """
+        Test LibreChat upload includes User-Id header.
+
+        LibreChat sends: 'User-Id': req.user.id
+        From crud.js: headers: { 'User-Id': req.user.id }
+        """
+        files = {"file": ("test.txt", io.BytesIO(b"content"), "text/plain")}
+        data = {"entity_id": "asst_test"}
+
+        # Add User-Id header as LibreChat does
+        headers = {
+            **auth_headers,
+            "User-Id": "user_abc123",
+            "User-Agent": "LibreChat/1.0",
+        }
+
+        response = client.post("/upload", files=files, data=data, headers=headers)
+
+        # Should accept the User-Id header without error
+        assert response.status_code == 200
+
+
+# =============================================================================
+# LIBRECHAT FILE RETRIEVAL
+# =============================================================================
+
+
+class TestLibreChatFileRetrieval:
+    """Test file retrieval endpoints as LibreChat uses them.
+
+    LibreChat uses these endpoints to:
+    1. GET /files/{session_id}?detail=... - List session files
+    2. GET /download/{session_id}/{fileId} - Download generated files
+
+    From CodeExecutor.ts and process.js
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup_mocks(self):
+        """Set up mocks for file service."""
+        self.mock_file_service = AsyncMock()
+
+        from src.dependencies.services import get_file_service
+
+        app.dependency_overrides[get_file_service] = lambda: self.mock_file_service
+
+        yield
+
+        app.dependency_overrides.clear()
+
+    def test_files_endpoint_with_detail_summary(self, client, auth_headers):
+        """
+        Test GET /files/{session_id}?detail=summary endpoint.
+
+        LibreChat calls this to check if session files exist.
+        From process.js: GET /files/{session_id}?detail=summary
+        """
+        self.mock_file_service.list_files.return_value = [
+            FileInfo(
+                file_id="file-123",
+                filename="output.png",
+                size=1024,
+                content_type="image/png",
+                created_at=datetime.now(timezone.utc),
+                path="/output.png",
+            )
+        ]
+
+        response = client.get(
+            "/files/test-session-123?detail=summary", headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) == 1
+        item = data[0]
+        assert "name" in item, "Summary must have 'name' field"
+        assert "lastModified" in item, "Summary must have 'lastModified' field"
+        # LibreChat parses name with: file.name.startsWith(path) where path = "session_id/fileId"
+        assert (
+            item["name"] == "test-session-123/file-123"
+        ), f"name must be 'session_id/fileId' format, got: {item['name']}"
+        # lastModified must be ISO 8601 with Z suffix for LibreChat's Date parsing
+        assert item["lastModified"].endswith(
+            "Z"
+        ), f"lastModified must end with 'Z', got: {item['lastModified']}"
+
+    def test_files_endpoint_with_detail_full(self, client, auth_headers):
+        """
+        Test GET /files/{session_id}?detail=full endpoint.
+
+        LibreChat calls this to get full file metadata for execution.
+        From CodeExecutor.ts: GET /files/{session_id}?detail=full
+        """
+        self.mock_file_service.list_files.return_value = [
+            FileInfo(
+                file_id="file-456",
+                filename="data.csv",
+                size=2048,
+                content_type="text/csv",
+                created_at=datetime.now(timezone.utc),
+                path="/data.csv",
+            )
+        ]
+
+        response = client.get(
+            "/files/test-session-456?detail=full", headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+
+    def test_download_endpoint(self, client, auth_headers):
+        """
+        Test GET /download/{session_id}/{fileId} endpoint.
+
+        LibreChat downloads generated files using this endpoint.
+        From crud.js: GET /download/{session_id}/{fileId} with responseType: 'arraybuffer'
+        """
+        self.mock_file_service.get_file_info.return_value = FileInfo(
+            file_id="file-abc",
+            filename="output.txt",
+            size=17,
+            content_type="text/plain",
+            created_at=datetime.now(timezone.utc),
+            path="/output.txt",
+        )
+        self.mock_file_service.get_file_content.return_value = b"file content here"
+
+        response = client.get(
+            "/download/test-session-789/file-abc", headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        assert response.content == b"file content here"
+        assert "content-disposition" in response.headers
+
+
+# =============================================================================
+# LIBRECHAT AUTHENTICATION
+# =============================================================================
+
+
+class TestLibreChatAuthentication:
+    """Test authentication exactly as LibreChat uses it.
+
+    LibreChat only uses X-API-Key header for authentication.
+    From CodeExecutor.ts: headers: { 'X-API-Key': apiKey }
+    """
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_x_api_key_header(self, mock_execute, client):
+        """
+        Test x-api-key header authentication on protected endpoint.
+
+        LibreChat sends: headers: { 'X-API-Key': apiKey }
+        """
+        mock_execute.return_value = ExecResponse(
+            session_id="auth-test", stdout="ok\n", stderr="", files=[]
+        )
+        headers = {"x-api-key": "test-api-key-for-testing-12345"}
+
+        response = client.post(
+            "/exec", json={"code": "print('ok')", "lang": "py"}, headers=headers
+        )
+        assert response.status_code == 200
+
+
+# =============================================================================
+# LIBRECHAT ERROR HANDLING
+# =============================================================================
+
+
+class TestLibreChatErrors:
+    """Test error handling as LibreChat expects.
+
+    Critical: Code execution errors must return HTTP 200 with error in stderr.
+    LibreChat does NOT expect HTTP 4xx/5xx for code errors - only for API errors.
+    """
+
+    def test_validation_error_format(self, client, auth_headers):
+        """Test validation errors have expected format."""
+        # Missing required field - no mock needed, this tests request validation
+        response = client.post("/exec", json={"lang": "py"}, headers=auth_headers)
+
+        assert response.status_code == 422
+        data = response.json()
+        # API uses custom error format with 'error' field
+        assert "error" in data or "detail" in data
+
+    def test_auth_error_format(self, client):
+        """Test authentication errors have expected format."""
+        # No mock needed - this tests auth middleware
+        response = client.post("/exec", json={"code": "test", "lang": "py"})
+
+        assert response.status_code == 401
+        data = response.json()
+        assert "error" in data
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_execution_error_returns_200(self, mock_execute, client, auth_headers):
+        """
+        Test that code execution errors still return 200.
+
+        LibreChat expects 200 with error in stderr, not HTTP error.
+        """
+        mock_execute.return_value = ExecResponse(
+            session_id="err-session",
+            stdout="",
+            stderr="SyntaxError: invalid syntax\n",
+            files=[],
+        )
+
+        response = client.post(
+            "/exec",
+            json={"code": "this is not valid python [[[", "lang": "py"},
+            headers=auth_headers,
+        )
+
+        # CRITICAL: Should return 200, not 4xx or 5xx
+        assert response.status_code == 200
+
+        data = response.json()
+        # Should have standard response format with error in stderr
+        assert "session_id" in data
+        assert "files" in data
+        assert "stdout" in data
+        assert "stderr" in data
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_timeout_returns_200(self, mock_execute, client, auth_headers):
+        """Test that timeout still returns 200 with appropriate message."""
+        mock_execute.return_value = ExecResponse(
+            session_id="timeout-session",
+            stdout="",
+            stderr="Execution timed out after 30 seconds\n",
+            files=[],
+        )
+
+        response = client.post(
+            "/exec",
+            json={"code": "import time; time.sleep(9999)", "lang": "py"},
+            headers=auth_headers,
+        )
+
+        # Should return 200 even for timeout
+        assert response.status_code == 200
+
+
+# =============================================================================
+# LIBRECHAT FILE LIFECYCLE
+# =============================================================================
+
+
+class TestLibreChatFileLifecycle:
+    """Test the complete file lifecycle as LibreChat performs it.
+
+    Full flow:
+    1. Upload file via POST /upload (with 'file' singular field)
+    2. Execute code referencing the uploaded file
+    3. Check output files via GET /files/{session_id}?detail=summary
+    4. Download output file via GET /download/{session_id}/{fileId}
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup_mocks(self):
+        """Set up mocks for full lifecycle tests."""
+        self.mock_file_service = AsyncMock()
+        self.mock_file_service.store_uploaded_file.return_value = "uploaded-file-001"
+        self.mock_file_service.validate_uploads = MagicMock(return_value=None)
+
+        self.mock_session_service = AsyncMock()
+        self.mock_session_service.create_session.return_value = Session(
+            session_id="lifecycle-session-123",
+            status=SessionStatus.ACTIVE,
+            created_at=datetime.now(timezone.utc),
+            last_activity=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            metadata={},
+        )
+
+        from src.dependencies.services import get_file_service, get_session_service
+
+        app.dependency_overrides[get_file_service] = lambda: self.mock_file_service
+        app.dependency_overrides[get_session_service] = (
+            lambda: self.mock_session_service
+        )
+
+        yield
+
+        app.dependency_overrides.clear()
+
+    def test_upload_then_check_summary(self, client, auth_headers):
+        """
+        Test upload a file, then verify it appears in session file summary.
+
+        This is the primeFiles check: upload -> GET /files/{session_id}?detail=summary
+        """
+        # Step 1: Upload file (LibreChat uses 'file' singular)
+        upload_files = {
+            "file": ("data.csv", io.BytesIO(b"col1,col2\n1,2\n"), "text/csv")
+        }
+        upload_data = {"entity_id": "asst_test_agent"}
+
+        upload_response = client.post(
+            "/upload", files=upload_files, data=upload_data, headers=auth_headers
+        )
+        assert upload_response.status_code == 200
+        upload_result = upload_response.json()
+        assert upload_result["message"] == "success"
+        session_id = upload_result["storage_session_id"]
+        file_id = upload_result["files"][0]["fileId"]
+
+        # Step 2: Check summary endpoint
+        self.mock_file_service.list_files.return_value = [
+            FileInfo(
+                file_id=file_id,
+                filename="data.csv",
+                size=14,
+                content_type="text/csv",
+                created_at=datetime.now(timezone.utc),
+                path="/data.csv",
+            )
+        ]
+
+        summary_response = client.get(
+            f"/files/{session_id}?detail=summary", headers=auth_headers
+        )
+        assert summary_response.status_code == 200
+        summary_data = summary_response.json()
+        assert isinstance(summary_data, list)
+        assert len(summary_data) >= 1
+
+        # Verify format matches what LibreChat's process.js parses
+        item = summary_data[0]
+        assert "name" in item
+        assert "lastModified" in item
+        # name must be in "session_id/fileId" format
+        assert "/" in item["name"], "name must contain '/' separator"
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_upload_then_exec_with_file_ref(self, mock_execute, client, auth_headers):
+        """
+        Test upload a file, then execute code that references it.
+
+        LibreChat sends the session_id and fileId from upload response in exec request.
+        """
+        # Step 1: Upload
+        upload_files = {"file": ("input.txt", io.BytesIO(b"hello world"), "text/plain")}
+        upload_response = client.post(
+            "/upload",
+            files=upload_files,
+            data={"entity_id": "asst_test"},
+            headers=auth_headers,
+        )
+        assert upload_response.status_code == 200
+        upload_result = upload_response.json()
+        session_id = upload_result["storage_session_id"]
+        file_id = upload_result["files"][0]["fileId"]
+
+        # Step 2: Execute with file reference
+        mock_execute.return_value = ExecResponse(
+            session_id=session_id,
+            stdout="hello world\n",
+            stderr="",
+            files=[],
+        )
+
+        exec_response = client.post(
+            "/exec",
+            json={
+                "code": "with open('/mnt/data/input.txt') as f: print(f.read())",
+                "lang": "py",
+                "files": [
+                    {
+                        "id": file_id,
+                        "storage_session_id": session_id,
+                        "name": "input.txt",
+                    }
+                ],
+            },
+            headers=auth_headers,
+        )
+        assert exec_response.status_code == 200
+        exec_data = exec_response.json()
+        assert exec_data["session_id"] == session_id
+        assert exec_data["stdout"] == "hello world\n"
+
+    def test_download_output_file(self, client, auth_headers):
+        """
+        Test downloading an output file as LibreChat does.
+
+        LibreChat calls: GET /download/{session_id}/{fileId} with responseType: 'arraybuffer'
+        From crud.js: axios({ method: 'get', url, responseType: 'arraybuffer' })
+        """
+        session_id = "lifecycle-session-123"
+        file_id = "output-file-456"
+        file_content = b"\x89PNG\r\n\x1a\n fake image content"
+
+        self.mock_file_service.get_file_info.return_value = FileInfo(
+            file_id=file_id,
+            filename="chart.png",
+            size=len(file_content),
+            content_type="image/png",
+            created_at=datetime.now(timezone.utc),
+            path="/chart.png",
+        )
+        self.mock_file_service.get_file_content.return_value = file_content
+
+        response = client.get(f"/download/{session_id}/{file_id}", headers=auth_headers)
+
+        assert response.status_code == 200
+        assert response.content == file_content
+        assert "content-disposition" in response.headers
+
+    def test_librechat_user_agent_header(self, client, auth_headers):
+        """
+        Test that User-Agent: LibreChat/1.0 header works correctly.
+
+        LibreChat always sends this header. Verify it doesn't cause issues.
+        """
+        headers = {
+            **auth_headers,
+            "User-Agent": "LibreChat/1.0",
+            "User-Id": "user_abc123",
+        }
+        upload_files = {"file": ("test.txt", io.BytesIO(b"test"), "text/plain")}
+
+        response = client.post("/upload", files=upload_files, headers=headers)
+        assert response.status_code == 200
+
+
+# =============================================================================
+# LIBRECHAT PRIME FILES FLOW
+# =============================================================================
+
+
+class TestLibreChatPrimeFiles:
+    """Test the primeFiles() flow from LibreChat's process.js.
+
+    primeFiles() checks if previously uploaded files still exist in the
+    code interpreter session, and re-uploads them if they've expired.
+
+    Flow:
+    1. GET /files/{session_id}?detail=summary
+    2. Check response for file by matching name.startsWith("session_id/fileId")
+    3. Check if lastModified is less than 23 hours old
+    4. If missing or expired, re-upload via POST /upload
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup_mocks(self):
+        """Set up mocks for primeFiles tests."""
+        self.mock_file_service = AsyncMock()
+        self.mock_file_service.validate_uploads = MagicMock(return_value=None)
+        self.mock_file_service.store_uploaded_file.return_value = "reuploaded-file-001"
+
+        self.mock_session_service = AsyncMock()
+        self.mock_session_service.create_session.return_value = Session(
+            session_id="prime-session-123",
+            status=SessionStatus.ACTIVE,
+            created_at=datetime.now(timezone.utc),
+            last_activity=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            metadata={},
+        )
+
+        from src.dependencies.services import get_file_service, get_session_service
+
+        app.dependency_overrides[get_file_service] = lambda: self.mock_file_service
+        app.dependency_overrides[get_session_service] = (
+            lambda: self.mock_session_service
+        )
+
+        yield
+
+        app.dependency_overrides.clear()
+
+    def test_prime_files_check_existing(self, client, auth_headers):
+        """
+        Test checking if a file exists via summary endpoint.
+
+        LibreChat calls: GET /files/{session_id}?detail=summary
+        Then checks: response.data.find(file => file.name.startsWith(path))
+        """
+        session_id = "prime-session-123"
+        file_id = "prime-file-456"
+
+        self.mock_file_service.list_files.return_value = [
+            FileInfo(
+                file_id=file_id,
+                filename="data.csv",
+                size=100,
+                content_type="text/csv",
+                created_at=datetime.now(timezone.utc),
+                path="/data.csv",
+            )
+        ]
+
+        response = client.get(
+            f"/files/{session_id}?detail=summary", headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) == 1
+
+        # Simulate LibreChat's client-side parsing:
+        # file.name.startsWith("session_id/fileId")
+        file_identifier = f"{session_id}/{file_id}"
+        matching = [f for f in data if f["name"].startswith(file_identifier)]
+        assert (
+            len(matching) == 1
+        ), f"LibreChat expects to find file by name.startsWith('{file_identifier}')"
+
+    def test_prime_files_reupload_flow(self, client, auth_headers):
+        """
+        Test the re-upload flow when file is expired.
+
+        After checking summary, LibreChat re-uploads via POST /upload
+        if the file is missing or expired (>23 hours old).
+        """
+        session_id = "expired-session-123"
+
+        # Step 1: Summary returns empty (file expired/cleaned up)
+        self.mock_file_service.list_files.return_value = []
+
+        response = client.get(
+            f"/files/{session_id}?detail=summary", headers=auth_headers
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data == [], "Empty session should return empty array"
+
+        # Step 2: Re-upload the file (LibreChat uses 'file' singular)
+        upload_files = {"file": ("data.csv", io.BytesIO(b"col1,col2\n"), "text/csv")}
+        upload_data = {"entity_id": "asst_reupload_test"}
+
+        upload_response = client.post(
+            "/upload", files=upload_files, data=upload_data, headers=auth_headers
+        )
+        assert upload_response.status_code == 200
+        result = upload_response.json()
+        assert result["message"] == "success"
+        assert "storage_session_id" in result
+        assert len(result["files"]) == 1
+
+    def test_prime_files_empty_session_returns_empty_array(self, client, auth_headers):
+        """
+        Test that non-existent session returns empty array, not 404.
+
+        LibreChat expects an empty array for sessions with no files.
+        A 404 would cause an error in primeFiles().
+        """
+        self.mock_file_service.list_files.return_value = []
+
+        response = client.get(
+            "/files/nonexistent-session-xyz?detail=summary", headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data == [], "Non-existent session must return [], not 404"
+
+    def test_prime_files_name_format_matches_client_parsing(self, client, auth_headers):
+        """
+        Test that the name field format can be parsed by LibreChat.
+
+        LibreChat splits the fileIdentifier as:
+          const [path, queryString] = fileIdentifier.split('?')
+          const [session_id, id] = path.split('/')
+
+        So the name in summary must be "session_id/fileId" format.
+        """
+        session_id = "parse-test-session"
+        file_id = "parse-test-file"
+
+        self.mock_file_service.list_files.return_value = [
+            FileInfo(
+                file_id=file_id,
+                filename="result.json",
+                size=50,
+                content_type="application/json",
+                created_at=datetime.now(timezone.utc),
+                path="/result.json",
+            )
+        ]
+
+        response = client.get(
+            f"/files/{session_id}?detail=summary", headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+
+        name = data[0]["name"]
+        # Simulate LibreChat's parsing
+        parts = name.split("/")
+        assert (
+            len(parts) == 2
+        ), f"name must have exactly 2 parts split by '/', got: {name}"
+        parsed_session_id, parsed_file_id = parts
+        assert (
+            parsed_session_id == session_id
+        ), f"First part must be session_id '{session_id}', got: '{parsed_session_id}'"
+        assert (
+            parsed_file_id == file_id
+        ), f"Second part must be file_id '{file_id}', got: '{parsed_file_id}'"
+
+    def test_prime_files_last_modified_is_parseable_date(self, client, auth_headers):
+        """
+        Test that lastModified is a parseable date string.
+
+        LibreChat uses: checkIfActive(dateString) which creates new Date(dateString).
+        The date must be valid JavaScript Date-parseable ISO 8601 format.
+        """
+        self.mock_file_service.list_files.return_value = [
+            FileInfo(
+                file_id="date-test-file",
+                filename="test.txt",
+                size=10,
+                content_type="text/plain",
+                created_at=datetime.now(timezone.utc),
+                path="/test.txt",
+            )
+        ]
+
+        response = client.get(
+            "/files/date-test-session?detail=summary", headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        last_modified = data[0]["lastModified"]
+
+        # Must be parseable as ISO 8601 datetime
+        parsed = datetime.fromisoformat(last_modified.replace("Z", "+00:00"))
+        assert parsed is not None, "lastModified must be parseable ISO 8601"
+        # Must end with Z (UTC) for JavaScript Date compatibility
+        assert last_modified.endswith(
+            "Z"
+        ), f"lastModified must end with 'Z' for JS Date parsing, got: {last_modified}"
+
+
+# =============================================================================
+# LIBRECHAT CONCURRENCY AND HEADERS
+# =============================================================================
+
+
+class TestLibreChatConcurrency:
+    """Test rapid sequential access patterns that LibreChat may produce.
+
+    LibreChat can fire multiple tool calls in parallel, leading to
+    multiple exec requests that reference the same session or files.
+    TestClient is not thread-safe, so we test rapid sequential requests.
+    """
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_rapid_exec_requests(self, mock_execute, client, auth_headers):
+        """
+        Test multiple rapid exec requests can be processed without errors.
+
+        LibreChat may send parallel tool calls that execute code simultaneously.
+        Each should get a valid response.
+        """
+        mock_execute.return_value = ExecResponse(
+            session_id="concurrent-session", stdout="ok\n", stderr="", files=[]
+        )
+
+        responses = []
+        for i in range(5):
+            resp = client.post(
+                "/exec",
+                json={"code": f"print({i})", "lang": "py"},
+                headers=auth_headers,
+            )
+            responses.append(resp)
+
+        # All requests should succeed
+        for resp in responses:
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "session_id" in data
+            assert "stdout" in data
+            assert "stderr" in data
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_rapid_exec_same_session(self, mock_execute, client, auth_headers):
+        """
+        Test rapid exec requests referencing the same session_id.
+
+        LibreChat may have multiple requests accessing the same session.
+        """
+        session_id = "shared-session-123"
+        mock_execute.return_value = ExecResponse(
+            session_id=session_id, stdout="result\n", stderr="", files=[]
+        )
+
+        responses = []
+        for i in range(3):
+            resp = client.post(
+                "/exec",
+                json={
+                    "code": f"x = {i}",
+                    "lang": "py",
+                    "session_id": session_id,
+                },
+                headers=auth_headers,
+            )
+            responses.append(resp)
+
+        for resp in responses:
+            assert resp.status_code == 200
+
+
+class TestLibreChatFullHeaders:
+    """Test that the full set of headers LibreChat sends work correctly.
+
+    LibreChat sends various headers depending on the operation.
+    These tests verify none of them cause issues.
+    """
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_exec_with_full_librechat_headers(self, mock_execute, client):
+        """
+        Test exec request with all headers LibreChat sends.
+
+        From CodeExecutor.ts and crud.js, LibreChat sends:
+        - X-API-Key: apiKey
+        - User-Agent: LibreChat/1.0
+        - Content-Type: application/json
+        """
+        mock_execute.return_value = ExecResponse(
+            session_id="header-test", stdout="ok\n", stderr="", files=[]
+        )
+
+        headers = {
+            "X-API-Key": "test-api-key-for-testing-12345",
+            "User-Agent": "LibreChat/1.0",
+            "Content-Type": "application/json",
+        }
+
+        response = client.post(
+            "/exec",
+            json={"code": "print('ok')", "lang": "py"},
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    def test_upload_with_full_librechat_headers(self, client):
+        """
+        Test upload request with all headers LibreChat sends.
+
+        From crud.js, LibreChat sends:
+        - X-API-Key: apiKey
+        - User-Agent: LibreChat/1.0
+        - User-Id: req.user.id
+        - Content-Type: multipart/form-data (set by form)
+        """
+        mock_file_service = AsyncMock()
+        mock_file_service.store_uploaded_file.return_value = "header-test-file"
+        mock_file_service.validate_uploads = MagicMock(return_value=None)
+
+        mock_session_service = AsyncMock()
+        mock_session_service.create_session.return_value = Session(
+            session_id="header-test-session",
+            status=SessionStatus.ACTIVE,
+            created_at=datetime.now(timezone.utc),
+            last_activity=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            metadata={},
+        )
+
+        from src.dependencies.services import get_file_service, get_session_service
+
+        app.dependency_overrides[get_file_service] = lambda: mock_file_service
+        app.dependency_overrides[get_session_service] = lambda: mock_session_service
+
+        try:
+            headers = {
+                "X-API-Key": "test-api-key-for-testing-12345",
+                "User-Agent": "LibreChat/1.0",
+                "User-Id": "user_header_test",
+            }
+
+            upload_files = {"file": ("test.txt", io.BytesIO(b"content"), "text/plain")}
+            upload_data = {"entity_id": "asst_header_test"}
+
+            response = client.post(
+                "/upload", files=upload_files, data=upload_data, headers=headers
+            )
+            assert response.status_code == 200
+            result = response.json()
+            assert result["message"] == "success"
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_download_with_full_librechat_headers(self, client):
+        """
+        Test download request with LibreChat headers.
+
+        From crud.js: headers: { 'User-Agent': 'LibreChat/1.0', 'X-API-Key': apiKey }
+        Timeout: 15000ms
+        """
+        mock_file_service = AsyncMock()
+        mock_file_service.get_file_info.return_value = FileInfo(
+            file_id="dl-file",
+            filename="output.txt",
+            size=5,
+            content_type="text/plain",
+            created_at=datetime.now(timezone.utc),
+            path="/output.txt",
+        )
+        mock_file_service.get_file_content.return_value = b"hello"
+
+        from src.dependencies.services import get_file_service
+
+        app.dependency_overrides[get_file_service] = lambda: mock_file_service
+
+        try:
+            headers = {
+                "X-API-Key": "test-api-key-for-testing-12345",
+                "User-Agent": "LibreChat/1.0",
+            }
+
+            response = client.get("/download/dl-session/dl-file", headers=headers)
+            assert response.status_code == 200
+            assert response.content == b"hello"
+        finally:
+            app.dependency_overrides.clear()
+
+
+# =============================================================================
+# FIELD NAME GUARD - exec vs upload field name consistency
+# =============================================================================
+
+
+class TestFieldNameGuard:
+    """Verify that exec response files use 'id'/'name' and upload uses 'fileId'/'filename'.
+
+    LibreChat expects:
+    - /exec response files[]: {id, name, path?, session_id?}
+    - /upload response files[]: {fileId, filename}
+
+    These are DIFFERENT field names by design (matching LibreChat's expectations).
+    """
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_exec_response_uses_id_and_name(self, mock_execute, client, auth_headers):
+        """Exec response files must use 'id' and 'name' fields."""
+        mock_execute.return_value = ExecResponse(
+            session_id="guard-session",
+            stdout="",
+            stderr="",
+            files=[FileRef(id="gen-file-1", name="output.png", path="/output.png")],
+        )
+
+        response = client.post(
+            "/exec",
+            json={"code": "generate image", "lang": "py"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        file_ref = data["files"][0]
+        assert "id" in file_ref, "exec response files must use 'id'"
+        assert "name" in file_ref, "exec response files must use 'name'"
+        assert "fileId" not in file_ref, "exec response must NOT use 'fileId'"
+        assert "filename" not in file_ref, "exec response must NOT use 'filename'"
+
+    def test_upload_response_uses_fileid_and_filename(self, client, auth_headers):
+        """Upload response files must use 'fileId' and 'filename' fields."""
+        mock_file_service = AsyncMock()
+        mock_file_service.store_uploaded_file.return_value = "upload-file-001"
+        mock_file_service.validate_uploads = MagicMock(return_value=None)
+
+        mock_session_service = AsyncMock()
+        mock_session_service.create_session.return_value = Session(
+            session_id="guard-upload-session",
+            status=SessionStatus.ACTIVE,
+            created_at=datetime.now(timezone.utc),
+            last_activity=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            metadata={},
+        )
+
+        from src.dependencies.services import get_file_service, get_session_service
+
+        app.dependency_overrides[get_file_service] = lambda: mock_file_service
+        app.dependency_overrides[get_session_service] = lambda: mock_session_service
+
+        try:
+            files = {"file": ("test.txt", io.BytesIO(b"content"), "text/plain")}
+            response = client.post("/upload", files=files, headers=auth_headers)
+
+            assert response.status_code == 200
+            data = response.json()
+            file_info = data["files"][0]
+            assert "fileId" in file_info, "upload response must use 'fileId'"
+            assert "filename" in file_info, "upload response must use 'filename'"
+            assert "id" not in file_info, "upload response must NOT use 'id'"
+            assert "name" not in file_info, "upload response must NOT use 'name'"
+        finally:
+            app.dependency_overrides.clear()
+
+
+# =============================================================================
+# LIBRECHAT EDGE CASES
+# =============================================================================
+
+
+class TestLibreChatEdgeCases:
+    """Test edge-case behaviors that LibreChat relies on."""
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_session_id_always_present_in_response(
+        self, mock_execute, client, auth_headers
+    ):
+        """Every exec response must include a non-empty session_id string."""
+        mock_execute.return_value = ExecResponse(
+            session_id="edge-session-123", stdout="ok\n", stderr="", files=[]
+        )
+
+        response = client.post(
+            "/exec",
+            json={"code": "print('ok')", "lang": "py"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert "session_id" in data
+        assert isinstance(data["session_id"], str)
+        assert len(data["session_id"]) > 0
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_extra_fields_in_request_ignored(self, mock_execute, client, auth_headers):
+        """Extra/unknown fields in the request body must be silently ignored."""
+        mock_execute.return_value = ExecResponse(
+            session_id="extra-session", stdout="ok\n", stderr="", files=[]
+        )
+
+        request = {
+            "code": "print('ok')",
+            "lang": "py",
+            "unknown_field": "should be ignored",
+            "another_extra": 42,
+        }
+
+        response = client.post("/exec", json=request, headers=auth_headers)
+        assert response.status_code == 200
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_empty_files_array_accepted(self, mock_execute, client, auth_headers):
+        """Request with files:[] (empty array) must be accepted."""
+        mock_execute.return_value = ExecResponse(
+            session_id="empty-files-session", stdout="ok\n", stderr="", files=[]
+        )
+
+        request = {
+            "code": "print('ok')",
+            "lang": "py",
+            "files": [],
+        }
+
+        response = client.post("/exec", json=request, headers=auth_headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["files"] == []
+
+    def test_detail_full_name_format(self, client, auth_headers):
+        """GET /files/{session_id}?detail=full must return name as 'session_id/fileId'."""
+        mock_file_service = AsyncMock()
+        mock_file_service.list_files.return_value = [
+            FileInfo(
+                file_id="full-file-789",
+                filename="report.pdf",
+                size=4096,
+                content_type="application/pdf",
+                created_at=datetime.now(timezone.utc),
+                path="/report.pdf",
+            )
+        ]
+
+        from src.dependencies.services import get_file_service
+
+        app.dependency_overrides[get_file_service] = lambda: mock_file_service
+
+        try:
+            session_id = "edge-full-session"
+            response = client.get(
+                f"/files/{session_id}?detail=full", headers=auth_headers
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert isinstance(data, list)
+            assert len(data) == 1
+            item = data[0]
+            assert item["name"] == f"{session_id}/full-file-789"
+            assert item["id"] == "full-file-789"
+        finally:
+            app.dependency_overrides.clear()
+
+    def test_detail_full_has_original_filename_metadata(self, client, auth_headers):
+        """
+        GET /files/{sid}?detail=full must include metadata['original-filename'].
+
+        LibreChat reads this field at CodeExecutor.ts:170 to map sanitized
+        filenames back to original upload names.
+        """
+        mock_file_service = AsyncMock()
+        mock_file_service.list_files.return_value = [
+            FileInfo(
+                file_id="meta-file-001",
+                filename="my_report.pdf",
+                size=2048,
+                content_type="application/pdf",
+                created_at=datetime.now(timezone.utc),
+                path="/my_report.pdf",
+            ),
+            FileInfo(
+                file_id="meta-file-002",
+                filename="data.csv",
+                size=512,
+                content_type="text/csv",
+                created_at=datetime.now(timezone.utc),
+                path="/data.csv",
+            ),
+        ]
+
+        from src.dependencies.services import get_file_service
+
+        app.dependency_overrides[get_file_service] = lambda: mock_file_service
+
+        try:
+            response = client.get(
+                "/files/meta-test-session?detail=full", headers=auth_headers
+            )
+
+            assert response.status_code == 200
+            data = response.json()
+            assert isinstance(data, list)
+            assert len(data) == 2
+
+            for item in data:
+                assert "metadata" in item, "Full detail must include 'metadata'"
+                assert (
+                    "original-filename" in item["metadata"]
+                ), "metadata must include 'original-filename'"
+                assert isinstance(
+                    item["metadata"]["original-filename"], str
+                ), "original-filename must be a string"
+                assert (
+                    len(item["metadata"]["original-filename"]) > 0
+                ), "original-filename must not be empty"
+        finally:
+            app.dependency_overrides.clear()
+
+
+# =============================================================================
+# LIBRECHAT BASH EXECUTION
+# =============================================================================
+
+
+class TestLibreChatBashExecution:
+    """Test bash execution compatibility with LibreChat.
+
+    Bash was added as a supported language. These tests verify that bash
+    requests follow the same API contract as other languages.
+    """
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_bash_minimal_request(self, mock_execute, client, auth_headers):
+        """Minimal bash request should return 200 with standard response shape."""
+        mock_execute.return_value = ExecResponse(
+            session_id="bash-session-123",
+            stdout="hello\n",
+            stderr="",
+            files=[],
+        )
+
+        response = client.post(
+            "/exec",
+            json={"code": "echo hello", "lang": "bash"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["session_id"] == "bash-session-123"
+        assert data["stdout"] == "hello\n"
+        assert data["stderr"] == ""
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_bash_error_returns_200(self, mock_execute, client, auth_headers):
+        """Bash syntax error should return 200 with error in stderr."""
+        mock_execute.return_value = ExecResponse(
+            session_id="bash-err-session",
+            stdout="",
+            stderr="bash: syntax error near unexpected token\n",
+            files=[],
+        )
+
+        response = client.post(
+            "/exec",
+            json={"code": "if then fi done", "lang": "bash"},
+            headers=auth_headers,
+        )
+
+        # CRITICAL: Same as other languages - execution errors return 200
+        assert response.status_code == 200
+        data = response.json()
+        assert "session_id" in data
+        assert data["stderr"] != ""
+
+    @patch("src.services.orchestrator.ExecutionOrchestrator.execute")
+    def test_bash_response_matches_python_shape(
+        self, mock_execute, client, auth_headers
+    ):
+        """Bash response must have the same 4 fields as Python response."""
+        mock_execute.return_value = ExecResponse(
+            session_id="bash-shape-session",
+            stdout="result\n",
+            stderr="",
+            files=[],
+        )
+
+        response = client.post(
+            "/exec",
+            json={"code": "echo result", "lang": "bash"},
+            headers=auth_headers,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+
+        # Must have the same 4 required fields as any other language
+        assert "session_id" in data
+        assert "stdout" in data
+        assert "stderr" in data
+        assert "files" in data
+
+        # Type validation
+        assert isinstance(data["session_id"], str)
+        assert isinstance(data["stdout"], str)
+        assert isinstance(data["stderr"], str)
+        assert isinstance(data["files"], list)
+
+
+# =============================================================================
+# LIBRECHAT PROGRAMMATIC TOOL CALLING (PTC)
+# =============================================================================
+
+
+class TestLibreChatProgrammaticToolCalling:
+    """Test PTC endpoint compatibility from a LibreChat client perspective.
+
+    These tests verify the /exec/programmatic endpoint contract using the
+    same mocking pattern as test_programmatic_api.py.
+    """
+
+    @patch("src.api.programmatic._get_ptc_service")
+    def test_ptc_initial_request_completed(
+        self, mock_get_service, client, auth_headers
+    ):
+        """Initial PTC request with code+tools should return completed response."""
+        from src.models.programmatic import ProgrammaticExecResponse
+
+        mock_service = AsyncMock()
+        mock_service.start_execution.return_value = ProgrammaticExecResponse(
+            status="completed",
+            session_id="ptc-compat-session",
+            stdout="Hello from PTC\n",
+            stderr="",
+        )
+        mock_get_service.return_value = mock_service
+
+        from src.dependencies.services import get_session_service
+
+        mock_session_svc = AsyncMock()
+        mock_session_svc.create_session.return_value = Session(
+            session_id="ptc-compat-session",
+            status=SessionStatus.ACTIVE,
+            created_at=datetime.now(timezone.utc),
+            last_activity=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc),
+            metadata={},
+        )
+        app.dependency_overrides[get_session_service] = lambda: mock_session_svc
+
+        try:
+            response = client.post(
+                "/exec/programmatic",
+                json={
+                    "code": "print('Hello from PTC')",
+                    "tools": [{"name": "get_data", "description": "Get data"}],
+                },
+                headers=auth_headers,
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "completed"
+        assert "session_id" in data
+        assert isinstance(data["stdout"], str)
+        assert isinstance(data["stderr"], str)
+        assert mock_service.start_execution.await_args.kwargs["timeout"] is None
+
+    @patch("src.api.programmatic._get_ptc_service")
+    def test_ptc_initial_request_uses_millisecond_timeout_contract(
+        self, mock_get_service, client, auth_headers
+    ):
+        """LibreChat-compatible requests should send timeout in milliseconds."""
+        from src.models.programmatic import ProgrammaticExecResponse
+
+        mock_service = AsyncMock()
+        mock_service.start_execution.return_value = ProgrammaticExecResponse(
+            status="completed",
+            session_id="ptc-timeout-session",
+            stdout="done\n",
+            stderr="",
+        )
+        mock_get_service.return_value = mock_service
+
+        from src.dependencies.services import get_session_service
+
+        mock_session_svc = AsyncMock()
+        mock_session_svc.create_session.return_value = Session(
+            session_id="ptc-timeout-session",
+            status=SessionStatus.ACTIVE,
+            created_at=datetime.now(timezone.utc),
+            last_activity=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc),
+            metadata={},
+        )
+        app.dependency_overrides[get_session_service] = lambda: mock_session_svc
+
+        try:
+            response = client.post(
+                "/exec/programmatic",
+                json={
+                    "code": "print('Hello from PTC')",
+                    "timeout": 60000,
+                },
+                headers=auth_headers,
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        assert mock_service.start_execution.await_args.kwargs["timeout"] == 60
+
+    @patch("src.api.programmatic._get_ptc_service")
+    def test_ptc_initial_request_accepts_code_env_file_shape(
+        self, mock_get_service, client, auth_headers
+    ):
+        """LibreChat CodeEnvFile refs should survive request parsing unchanged."""
+        from src.models.programmatic import ProgrammaticExecResponse
+
+        mock_service = AsyncMock()
+        mock_service.start_execution.return_value = ProgrammaticExecResponse(
+            status="completed",
+            session_id="ptc-file-session",
+            stdout="done\n",
+            stderr="",
+        )
+        mock_get_service.return_value = mock_service
+
+        from src.dependencies.services import get_session_service
+
+        mock_session_svc = AsyncMock()
+        mock_session_svc.create_session.return_value = Session(
+            session_id="ptc-file-session",
+            status=SessionStatus.ACTIVE,
+            created_at=datetime.now(timezone.utc),
+            last_activity=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc),
+            metadata={},
+        )
+        app.dependency_overrides[get_session_service] = lambda: mock_session_svc
+
+        try:
+            response = client.post(
+                "/exec/programmatic",
+                json={
+                    "code": "print('Hello from PTC')",
+                    "files": [
+                        {
+                            "storage_session_id": "upload-session",
+                            "id": "file-123",
+                            "name": "report.csv",
+                        }
+                    ],
+                },
+                headers=auth_headers,
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        forwarded_files = mock_service.start_execution.await_args.kwargs["files"]
+        assert len(forwarded_files) == 1
+        assert forwarded_files[0].session_id == "upload-session"
+        assert forwarded_files[0].id == "file-123"
+        assert forwarded_files[0].name == "report.csv"
+
+    @patch("src.api.programmatic._get_ptc_service")
+    def test_ptc_tool_call_required_response(
+        self, mock_get_service, client, auth_headers
+    ):
+        """PTC request that calls a tool should return tool_call_required."""
+        from src.models.programmatic import ProgrammaticExecResponse, PTCToolCall
+
+        mock_service = AsyncMock()
+        mock_service.start_execution.return_value = ProgrammaticExecResponse(
+            status="tool_call_required",
+            session_id="ptc-tool-session",
+            continuation_token="cont-token-xyz",
+            tool_calls=[
+                PTCToolCall(id="call-abc", name="get_weather", input={"city": "NYC"}),
+            ],
+            stdout="",
+            stderr="",
+        )
+        mock_get_service.return_value = mock_service
+
+        from src.dependencies.services import get_session_service
+
+        mock_session_svc = AsyncMock()
+        mock_session_svc.create_session.return_value = Session(
+            session_id="ptc-tool-session",
+            status=SessionStatus.ACTIVE,
+            created_at=datetime.now(timezone.utc),
+            last_activity=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc),
+            metadata={},
+        )
+        app.dependency_overrides[get_session_service] = lambda: mock_session_svc
+
+        try:
+            response = client.post(
+                "/exec/programmatic",
+                json={
+                    "code": "result = await get_weather(city='NYC')",
+                    "tools": [
+                        {
+                            "name": "get_weather",
+                            "description": "Get weather",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"city": {"type": "string"}},
+                            },
+                        }
+                    ],
+                },
+                headers=auth_headers,
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "tool_call_required"
+        assert "continuation_token" in data
+        assert isinstance(data["continuation_token"], str)
+        assert len(data["tool_calls"]) == 1
+
+        tool_call = data["tool_calls"][0]
+        assert "id" in tool_call
+        assert "name" in tool_call
+        assert "input" in tool_call
+        assert tool_call["name"] == "get_weather"
+
+    @patch("src.api.programmatic._get_ptc_service")
+    def test_ptc_continuation_flow(self, mock_get_service, client, auth_headers):
+        """Continuation with tool_results should return completed response."""
+        from src.models.programmatic import ProgrammaticExecResponse
+
+        mock_service = AsyncMock()
+        mock_service.continue_execution.return_value = ProgrammaticExecResponse(
+            status="completed",
+            session_id="ptc-cont-session",
+            stdout="Weather in NYC: 72F\n",
+            stderr="",
+        )
+        mock_get_service.return_value = mock_service
+
+        from src.dependencies.services import get_session_service
+
+        mock_session_svc = AsyncMock()
+        app.dependency_overrides[get_session_service] = lambda: mock_session_svc
+
+        try:
+            response = client.post(
+                "/exec/programmatic",
+                json={
+                    "continuation_token": "cont-token-xyz",
+                    "tool_results": [
+                        {
+                            "call_id": "call-abc",
+                            "result": {"temp": 72, "conditions": "sunny"},
+                            "is_error": False,
+                        }
+                    ],
+                },
+                headers=auth_headers,
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "completed"
+        assert data["stdout"] == "Weather in NYC: 72F\n"
+
+        mock_service.continue_execution.assert_called_once()
+
+    @patch("src.api.programmatic._get_ptc_service")
+    def test_ptc_error_tool_result(self, mock_get_service, client, auth_headers):
+        """Tool result with is_error=true should be handled correctly."""
+        from src.models.programmatic import ProgrammaticExecResponse
+
+        mock_service = AsyncMock()
+        mock_service.continue_execution.return_value = ProgrammaticExecResponse(
+            status="completed",
+            session_id="ptc-err-session",
+            stdout="Tool failed: API unavailable\n",
+            stderr="",
+        )
+        mock_get_service.return_value = mock_service
+
+        from src.dependencies.services import get_session_service
+
+        mock_session_svc = AsyncMock()
+        app.dependency_overrides[get_session_service] = lambda: mock_session_svc
+
+        try:
+            response = client.post(
+                "/exec/programmatic",
+                json={
+                    "continuation_token": "cont-token-err",
+                    "tool_results": [
+                        {
+                            "call_id": "call-fail",
+                            "result": None,
+                            "is_error": True,
+                            "error_message": "API unavailable",
+                        }
+                    ],
+                },
+                headers=auth_headers,
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        data = response.json()
+        # Response should be valid regardless of tool error
+        assert data["status"] in ("completed", "error")
+        mock_service.continue_execution.assert_called_once()
+
+
+# =============================================================================
+# /upload/batch — multi-file uploads (LibreChat skill priming flow)
+# =============================================================================
+
+
+class TestLibreChatUploadBatch:
+    """Tests for POST /upload/batch.
+
+    LibreChat's `crud.js:118` posts repeated `file` fields plus optional
+    `entity_id`. The response must include `succeeded`/`failed` counts and
+    per-file `status` so LibreChat's caller can distinguish hard failures
+    from partial successes (`crud.js:146-172`).
+
+    Filenames may include subdirectories — the agents library uploads skill
+    bundles like `skills/foo/SKILL.md` and verifies on the response with
+    `f.filename.endsWith('/SKILL.md')` (`packages/api/src/agents/skillFiles.ts:160`).
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup_mocks(self):
+        # Track which filenames were stored to verify nested-path preservation
+        # without re-implementing storage in the mock.
+        stored_filenames = []
+
+        async def fake_store(
+            session_id,
+            filename,
+            content,
+            content_type,
+            is_agent_file,
+            is_read_only=False,
+            original_filename=None,
+        ):
+            stored_filenames.append(filename)
+            return f"fid-{len(stored_filenames)}"
+
+        mock_file_service = AsyncMock()
+        mock_file_service.store_uploaded_file = AsyncMock(side_effect=fake_store)
+
+        mock_session_service = AsyncMock()
+        mock_session_service.create_session.return_value = Session(
+            session_id="batch-session-456",
+            status=SessionStatus.ACTIVE,
+            created_at=datetime.now(timezone.utc),
+            last_activity=datetime.now(timezone.utc),
+            expires_at=datetime.now(timezone.utc) + timedelta(hours=24),
+            metadata={},
+        )
+
+        from src.dependencies.services import get_file_service, get_session_service
+
+        app.dependency_overrides[get_file_service] = lambda: mock_file_service
+        app.dependency_overrides[get_session_service] = lambda: mock_session_service
+
+        yield {"stored": stored_filenames, "file_service": mock_file_service}
+
+        app.dependency_overrides.clear()
+
+    def test_response_shape_matches_librechat_contract(self, client, auth_headers):
+        files = [
+            ("file", ("a.txt", io.BytesIO(b"alpha"), "text/plain")),
+            ("file", ("b.txt", io.BytesIO(b"bravo"), "text/plain")),
+        ]
+        response = client.post("/upload/batch", files=files, headers=auth_headers)
+
+        assert response.status_code == 200
+        result = response.json()
+        # All five top-level keys present (LibreChat reads each one)
+        for key in ("message", "storage_session_id", "files", "succeeded", "failed"):
+            assert key in result, f"Missing required key: {key}"
+        assert result["message"] == "success"
+        assert result["succeeded"] == 2
+        assert result["failed"] == 0
+        for entry in result["files"]:
+            # Per-file shape: status, fileId (success only), filename
+            assert entry["status"] == "success"
+            assert "fileId" in entry
+            assert "filename" in entry
+
+    def test_partial_failure_reports_per_file_errors(
+        self, client, auth_headers, setup_mocks
+    ):
+        # `.exe` is not in allowed_file_extensions -> per-file error.
+        files = [
+            ("file", ("good.txt", io.BytesIO(b"ok"), "text/plain")),
+            ("file", ("bad.exe", io.BytesIO(b"\x00"), "application/octet-stream")),
+        ]
+        response = client.post("/upload/batch", files=files, headers=auth_headers)
+
+        assert response.status_code == 200
+        result = response.json()
+        assert result["message"] == "partial"
+        assert result["succeeded"] == 1
+        assert result["failed"] == 1
+
+        statuses = {f["filename"]: f for f in result["files"]}
+        assert statuses["good.txt"]["status"] == "success"
+        assert statuses["bad.exe"]["status"] == "error"
+        assert "error" in statuses["bad.exe"]
+
+    def test_all_failures_report_message_error(self, client, auth_headers):
+        # All files have disallowed extensions
+        files = [
+            ("file", ("bad1.exe", io.BytesIO(b"x"), "application/octet-stream")),
+            ("file", ("bad2.dll", io.BytesIO(b"y"), "application/octet-stream")),
+        ]
+        response = client.post("/upload/batch", files=files, headers=auth_headers)
+
+        assert response.status_code == 200
+        result = response.json()
+        # LibreChat throws if message=='error' (crud.js:158)
+        assert result["message"] == "error"
+        assert result["succeeded"] == 0
+        assert result["failed"] == 2
+
+    def test_empty_batch_returns_422(self, client, auth_headers):
+        response = client.post("/upload/batch", headers=auth_headers)
+        assert response.status_code == 422
+
+    def test_files_field_name_must_be_singular(self, client, auth_headers):
+        # The repeated 'files' (plural) field name is not what LibreChat uses;
+        # we should treat it as missing and 422.
+        files = [("files", ("a.txt", io.BytesIO(b"x"), "text/plain"))]
+        response = client.post("/upload/batch", files=files, headers=auth_headers)
+        assert response.status_code == 422
+
+    def test_entity_id_marks_files_as_agent(self, client, auth_headers, setup_mocks):
+        files = [("file", ("doc.txt", io.BytesIO(b"hi"), "text/plain"))]
+        data = {"entity_id": "asst_skill_123"}
+        response = client.post(
+            "/upload/batch", files=files, data=data, headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        # Verify is_agent_file=True was passed through
+        store = setup_mocks["file_service"].store_uploaded_file
+        assert store.await_count == 1
+        kwargs = store.await_args.kwargs
+        assert kwargs["is_agent_file"] is True
+
+    def test_nested_filename_preserved_in_response(
+        self, client, auth_headers, setup_mocks
+    ):
+        # LibreChat skill priming sends `skills/<skill>/SKILL.md`.
+        files = [
+            (
+                "file",
+                (
+                    "skills/weather_lookup/SKILL.md",
+                    io.BytesIO(b"# Weather skill"),
+                    "text/markdown",
+                ),
+            )
+        ]
+        response = client.post("/upload/batch", files=files, headers=auth_headers)
+
+        assert response.status_code == 200
+        result = response.json()
+        assert result["files"][0]["filename"] == "skills/weather_lookup/SKILL.md"
+        # The stored filename also preserves the path so S3/sandbox round-trip works.
+        assert "skills/weather_lookup/SKILL.md" in setup_mocks["stored"]
+
+    def test_kind_skill_marks_files_as_agent(self, client, auth_headers, setup_mocks):
+        """kind=skill bypasses extension whitelist for skill-priming uploads."""
+        files = [
+            ("file", ("schema.xsd", io.BytesIO(b"<xs:schema/>"), "application/xml"))
+        ]
+        data = {"kind": "skill", "id": "skill_abc123", "version": "3"}
+        response = client.post(
+            "/upload/batch", files=files, data=data, headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        store = setup_mocks["file_service"].store_uploaded_file
+        assert store.await_count == 1
+        kwargs = store.await_args.kwargs
+        assert kwargs["is_agent_file"] is True
+
+    def test_kind_agent_marks_files_as_agent(self, client, auth_headers, setup_mocks):
+        """kind=agent also bypasses extension whitelist."""
+        files = [
+            ("file", ("config.toml", io.BytesIO(b"[tool]"), "application/toml"))
+        ]
+        data = {"kind": "agent", "id": "agent_xyz"}
+        response = client.post(
+            "/upload/batch", files=files, data=data, headers=auth_headers
+        )
+
+        assert response.status_code == 200
+        store = setup_mocks["file_service"].store_uploaded_file
+        assert store.await_count == 1
+        kwargs = store.await_args.kwargs
+        assert kwargs["is_agent_file"] is True
+
+    def test_batch_response_includes_storage_session_id(
+        self, client, auth_headers, setup_mocks
+    ):
+        """LibreChat validates storage_session_id in batch upload response."""
+        files = [("file", ("data.csv", io.BytesIO(b"a,b"), "text/csv"))]
+        response = client.post("/upload/batch", files=files, headers=auth_headers)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "storage_session_id" in body
+        assert body["storage_session_id"] == body["session_id"]
+
+
+# =============================================================================
+# GET /sessions/{session_id}/objects/{file_id} — liveness probe
+# =============================================================================
+
+
+class TestLibreChatSessionObjectMetadata:
+    """LibreChat's `process.js:363` reads `lastModified` to decide whether
+    a session is still valid (>23h old means re-upload). Format matches the
+    `?detail=summary` listing: ISO 8601 with `Z` and millisecond precision."""
+
+    @pytest.fixture(autouse=True)
+    def setup_mocks(self):
+        from src.dependencies.services import get_file_service
+
+        self.mock = AsyncMock()
+        app.dependency_overrides[get_file_service] = lambda: self.mock
+        yield
+        app.dependency_overrides.clear()
+
+    def test_returns_lastmodified_with_z_suffix(self, client, auth_headers):
+        self.mock.get_file_info.return_value = FileInfo(
+            file_id="fid-1",
+            filename="data.csv",
+            size=12,
+            content_type="text/csv",
+            created_at=datetime(2026, 4, 22, 9, 17, 6, tzinfo=timezone.utc),
+            path="/data/data.csv",
+        )
+        response = client.get("/sessions/sess-1/objects/fid-1", headers=auth_headers)
+        assert response.status_code == 200
+        body = response.json()
+        assert set(body.keys()) == {"lastModified"}
+        assert body["lastModified"].endswith("Z")
+        # Parseable by JS `new Date(...)` => parseable by Python's ISO parser too
+        assert "2026-04-22" in body["lastModified"]
+
+    def test_naive_datetime_normalized_to_utc(self, client, auth_headers):
+        self.mock.get_file_info.return_value = FileInfo(
+            file_id="fid-2",
+            filename="x.txt",
+            size=1,
+            content_type="text/plain",
+            created_at=datetime(2026, 1, 15, 12, 0, 0),  # naive
+            path="/data/x.txt",
+        )
+        response = client.get("/sessions/sess-1/objects/fid-2", headers=auth_headers)
+        assert response.status_code == 200
+        assert response.json()["lastModified"].endswith("Z")
+
+    def test_missing_file_returns_404(self, client, auth_headers):
+        self.mock.get_file_info.return_value = None
+        response = client.get("/sessions/sess-1/objects/missing", headers=auth_headers)
+        # LibreChat catches and re-uploads on 404 -> the desired fallback.
+        assert response.status_code == 404
+
+    def test_lastmodified_matches_summary_endpoint(self, client, auth_headers):
+        """Same FileInfo => same lastModified value across both endpoints
+        (so LibreChat's two read paths agree about session age)."""
+        file_info = FileInfo(
+            file_id="fid-3",
+            filename="y.txt",
+            size=2,
+            content_type="text/plain",
+            created_at=datetime(2026, 3, 14, 9, 26, 53, tzinfo=timezone.utc),
+            path="/data/y.txt",
+        )
+        # Both endpoints share the same get_file_info / list_files-derived value
+        self.mock.get_file_info.return_value = file_info
+        self.mock.list_files.return_value = [file_info]
+
+        obj_resp = client.get("/sessions/sess-1/objects/fid-3", headers=auth_headers)
+        list_resp = client.get("/files/sess-1?detail=summary", headers=auth_headers)
+
+        obj_modified = obj_resp.json()["lastModified"]
+        list_modified = list_resp.json()[0]["lastModified"]
+        assert obj_modified == list_modified

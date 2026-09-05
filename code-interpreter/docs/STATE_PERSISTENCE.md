@@ -1,0 +1,442 @@
+# Python State Persistence Guide
+
+This document describes the Python state persistence feature, which allows variables, functions, and objects to persist across executions within a session.
+
+State persistence is an internal backend capability. The current API does not expose a public `/state/*` upload/download surface; state is loaded and saved as part of normal `/exec` session continuity.
+
+For Python, `/exec` is stateful whenever the backend reuses the same session. The clearest way to request that is to send the prior `session_id`, but the backend can also reuse a session through same-user file references or `entity_id` continuity.
+
+## Overview
+
+By default, each code execution starts with a clean Python interpreter. With state persistence enabled, Python sessions can maintain state across multiple `/exec` API calls, enabling:
+
+- **Iterative development**: Build up variables and functions across requests
+- **Long-running workflows**: Create data in one call, analyze in subsequent calls
+- **ML pipelines**: Train models in one call, use for predictions in later calls
+
+### Architecture
+
+State persistence uses a hybrid storage architecture:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Hybrid State Storage                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│   Hot Storage (Redis)                  Cold Storage (S3)                    │
+│   ┌─────────────────────┐              ┌─────────────────────┐             │
+│   │ TTL: 2 hours        │    Archive   │ TTL: 1 day          │             │
+│   │ Access: ~1ms        │ ──────────▶  │ Access: ~50ms       │             │
+│   │ State: compressed   │   (after     │ State: compressed   │             │
+│   │        lz4 + base64 │   1 hour     │        lz4 + base64 │             │
+│   └─────────────────────┘  inactive)   └─────────────────────┘             │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+## How It Works
+
+### Execution Flow with State
+
+1. **First execution (no session_id)**:
+
+   ```
+   POST /exec {"lang": "py", "code": "x = 42"}
+
+   → Sandbox executes code
+   → REPL server captures namespace: {"x": 42}
+   → Namespace serialized with cloudpickle
+   → Compressed with lz4 (~10x reduction)
+   → Stored in Redis with 2-hour TTL
+   → Response includes session_id
+   ```
+
+2. **Subsequent execution (with session_id)**:
+
+   ```
+   POST /exec {"lang": "py", "code": "print(x)", "session_id": "abc123"}
+
+   → StateService loads state from Redis
+   → If not in Redis, checks S3 archives
+   → State deserialized into REPL namespace
+   → Code executes with existing variables
+   → Updated state saved back to Redis
+   ```
+
+### Serialization
+
+State is serialized using:
+
+| Step         | Library       | Purpose                                                  |
+| ------------ | ------------- | -------------------------------------------------------- |
+| 1. Serialize | `cloudpickle` | Handles complex objects (lambdas, classes, numpy arrays) |
+| 2. Compress  | `lz4`         | Fast compression (~10x size reduction)                   |
+| 3. Encode    | `base64`      | Safe storage in Redis                                    |
+
+**Why cloudpickle?** Standard `pickle` cannot serialize:
+
+- Lambda functions
+- Functions defined in `__main__`
+- Closures
+- Dynamically created classes
+
+cloudpickle handles all these cases, making it ideal for interactive sessions.
+
+### Archival Process
+
+A background task runs every 5 minutes to archive inactive states:
+
+```
+CleanupService (every 5 min)
+    │
+    └── For each state in Redis:
+            │
+            ├── Check last access time
+            │
+            └── If inactive > 1 hour:
+                    │
+                    ├── Upload to S3 (state-archive/{session_id})
+                    │
+                    └── Keep in Redis (will expire at 2 hours)
+```
+
+When a session resumes after Redis expiry:
+
+1. StateService checks Redis → not found
+2. StateArchivalService checks S3 → found
+3. State restored to Redis for fast future access
+
+---
+
+## Configuration
+
+### State Persistence Settings
+
+| Variable                    | Default | Description                          |
+| --------------------------- | ------- | ------------------------------------ |
+| `STATE_PERSISTENCE_ENABLED` | `true`  | Enable/disable state persistence     |
+| `STATE_TTL_SECONDS`         | `7200`  | Redis TTL (default 2 hours)          |
+| `STATE_MAX_REDIS_SIZE_MB`   | `100`   | Max raw state size in Redis (MB). Larger states bypass Redis and go straight to S3 |
+| `STATE_CAPTURE_ON_ERROR`    | `false` | Save state even on execution failure |
+
+### State Archival Settings
+
+| Variable                               | Default | Description                            |
+| -------------------------------------- | ------- | -------------------------------------- |
+| `STATE_ARCHIVE_ENABLED`                | `true`  | Enable S3 cold storage archival        |
+| `STATE_ARCHIVE_AFTER_SECONDS`          | `3600`  | Archive after this inactivity (1 hour) |
+| `STATE_ARCHIVE_TTL_DAYS`               | `1`     | Keep archives for this many days (24h) |
+| `STATE_ARCHIVE_CHECK_INTERVAL_SECONDS` | `300`   | Check frequency (5 minutes)            |
+
+### Disabling State Persistence
+
+To disable state persistence entirely:
+
+```bash
+STATE_PERSISTENCE_ENABLED=false
+```
+
+When disabled:
+
+- Each Python execution starts with a clean namespace
+- No state is saved to Redis or S3
+- `session_id` in requests is ignored for state (it still scopes files and session continuity)
+
+---
+
+## Usage Examples
+
+### Basic Usage
+
+```bash
+# First request - creates session and variables
+curl -sk -X POST https://localhost/exec \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $API_KEY" \
+  -d '{
+    "lang": "py",
+    "code": "x = [1, 2, 3]\ndef add(a, b): return a + b",
+    "entity_id": "test",
+    "user_id": "user1"
+  }'
+
+# Response:
+# {
+#   "session_id": "abc123...",
+#   "stdout": "",
+#   "stderr": "",
+#   "exit_code": 0
+# }
+
+# Second request - reuses session and state
+curl -sk -X POST https://localhost/exec \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $API_KEY" \
+  -d '{
+    "lang": "py",
+    "code": "print(sum(x), add(10, 20))",
+    "entity_id": "test",
+    "user_id": "user1",
+    "session_id": "abc123..."
+  }'
+
+# Response:
+# {
+#   "stdout": "6 30\n",
+#   "stderr": "",
+#   "exit_code": 0
+# }
+```
+
+### Working with Data
+
+```bash
+# Create a DataFrame
+curl -sk -X POST https://localhost/exec \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $API_KEY" \
+  -d '{
+    "lang": "py",
+    "code": "import pandas as pd\ndf = pd.DataFrame({\"a\": [1,2,3], \"b\": [4,5,6]})",
+    "entity_id": "test",
+    "user_id": "user1"
+  }'
+# Returns session_id
+
+# Query the DataFrame in next request
+curl -sk -X POST https://localhost/exec \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $API_KEY" \
+  -d '{
+    "lang": "py",
+    "code": "print(df.describe())",
+    "entity_id": "test",
+    "user_id": "user1",
+    "session_id": "<session_id from above>"
+  }'
+```
+
+### ML Model Training
+
+```bash
+# Train a model
+curl -sk -X POST https://localhost/exec \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $API_KEY" \
+  -d '{
+    "lang": "py",
+    "code": "from sklearn.linear_model import LinearRegression\nimport numpy as np\nX = np.array([[1],[2],[3]])\ny = np.array([1,2,3])\nmodel = LinearRegression().fit(X, y)",
+    "entity_id": "test",
+    "user_id": "user1"
+  }'
+
+# Use model for predictions
+curl -sk -X POST https://localhost/exec \
+  -H "Content-Type: application/json" \
+  -H "x-api-key: $API_KEY" \
+  -d '{
+    "lang": "py",
+    "code": "print(model.predict([[4], [5]]))",
+    "entity_id": "test",
+    "user_id": "user1",
+    "session_id": "<session_id>"
+  }'
+# Output: [4. 5.]
+```
+
+---
+
+## What Persists
+
+### Supported Types
+
+| Type               | Examples                              | Notes                                 |
+| ------------------ | ------------------------------------- | ------------------------------------- |
+| Primitives         | `int`, `float`, `str`, `bool`, `None` | Fully supported                       |
+| Collections        | `list`, `dict`, `set`, `tuple`        | Fully supported                       |
+| NumPy arrays       | `np.array([1,2,3])`                   | Serialized efficiently                |
+| Pandas objects     | `DataFrame`, `Series`                 | Serialized efficiently                |
+| User functions     | `def foo(): ...`                      | Including closures                    |
+| User classes       | `class MyClass: ...`                  | Including instances                   |
+| Sklearn models     | `LinearRegression()`, etc.            | Trained state preserved               |
+| Matplotlib figures | `plt.figure()`                        | As object (use `savefig()` for files) |
+
+### What Does NOT Persist
+
+| Type                          | Reason                           |
+| ----------------------------- | -------------------------------- |
+| Open file handles             | Cannot serialize OS resources    |
+| Network connections           | Cannot serialize sockets         |
+| Running threads/processes     | Cannot serialize execution state |
+| Module-level state            | Imports reset each execution     |
+| Generator state               | Cannot serialize iteration state |
+| Compiled regex with callbacks | Cannot serialize C extensions    |
+
+### Edge Cases
+
+**Modules imported at session start:**
+
+```python
+# Session 1
+import pandas as pd
+df = pd.DataFrame({"a": [1,2,3]})
+
+# Session 2 (same session_id)
+print(df)  # Works! df is restored
+print(pd)  # Error! pd must be re-imported
+```
+
+**Solution:** Re-import modules in each execution, or assign to variables:
+
+```python
+# Session 1
+import pandas
+pd = pandas  # Now pd is in namespace
+```
+
+---
+
+## Technical Details
+
+### REPL Server Implementation
+
+The REPL server (`docker/repl_server.py`) handles serialization:
+
+```python
+# After code execution
+namespace = {k: v for k, v in globals().items()
+             if not k.startswith('_') and k not in BUILTIN_NAMES}
+
+# Serialize
+state_bytes = cloudpickle.dumps(namespace)
+compressed = lz4.frame.compress(state_bytes)
+encoded = base64.b64encode(compressed).decode('utf-8')
+
+# Return in response
+{"stdout": "...", "state": encoded}
+```
+
+### State Size Limits
+
+The maximum *Redis* state size is configurable via `STATE_MAX_REDIS_SIZE_MB` (default 100 MB of raw bytes).
+
+When state exceeds this limit:
+
+1. The state bypasses Redis hot storage and is written directly to S3 cold storage
+2. Subsequent executions reload it from S3 (slightly higher latency than Redis)
+3. Execution still succeeds normally
+
+**Common causes of large state:**
+
+- Large datasets loaded into memory
+- Many trained ML models
+- Cached computation results
+
+**Solutions:**
+
+- Save large data to files instead of variables
+- Clear unused variables: `del large_variable`
+- Tune the Redis ceiling if needed: `STATE_MAX_REDIS_SIZE_MB=200`
+
+### Storage Keys
+
+| Storage | Key Pattern                  | Content                     |
+| ------- | ---------------------------- | --------------------------- |
+| Redis   | `state:{session_id}`         | Compressed state + metadata |
+| S3      | `state-archive/{session_id}` | Compressed state (archived) |
+
+---
+
+## Performance Considerations
+
+### Serialization Overhead
+
+| State Size | Serialize | Compress | Total Overhead |
+| ---------- | --------- | -------- | -------------- |
+| 1 KB       | ~1ms      | ~0.1ms   | ~1ms           |
+| 100 KB     | ~5ms      | ~1ms     | ~6ms           |
+| 1 MB       | ~20ms     | ~5ms     | ~25ms          |
+| 10 MB      | ~150ms    | ~40ms    | ~190ms         |
+
+**Recommendation:** Keep state under 1MB for minimal latency impact.
+
+### Compression Ratio
+
+lz4 typically achieves:
+
+- Python objects: 5-10x compression
+- NumPy arrays: 2-5x compression (depends on data)
+- Pandas DataFrames: 3-8x compression
+
+### Memory Usage
+
+During serialization, memory temporarily doubles:
+
+- Original object in memory
+- Serialized copy being created
+
+Ensure sandboxes have sufficient memory for state operations.
+
+---
+
+## Troubleshooting
+
+### State Not Persisting
+
+1. **Check if enabled:**
+
+   ```bash
+   # Verify setting
+   echo $STATE_PERSISTENCE_ENABLED  # Should be "true"
+   ```
+
+2. **Check session_id:**
+   - Ensure you're passing the `session_id` from the first response
+   - Session IDs are case-sensitive
+
+3. **Check state size:**
+   - Very large states bypass Redis (`STATE_MAX_REDIS_SIZE_MB`) and may take longer to reload from S3
+   - Check logs for state-size related warnings
+
+### State Restored but Variables Missing
+
+1. **Module imports:**
+   - Imported modules don't persist; re-import each execution
+
+2. **Builtin overrides:**
+   - Variables named after builtins may not persist
+
+3. **Private variables:**
+   - Variables starting with `_` are excluded
+
+### Redis Connection Issues
+
+```bash
+# Check Redis connectivity
+curl -X GET https://localhost/health/redis \
+  -H "x-api-key: $API_KEY"
+```
+
+### Archive Not Working
+
+1. **Check S3 connectivity:**
+
+   ```bash
+   curl -X GET https://localhost/health/s3 \
+     -H "x-api-key: $API_KEY"
+   ```
+
+2. **Check archival settings:**
+   ```bash
+   echo $STATE_ARCHIVE_ENABLED        # Should be "true"
+   echo $STATE_ARCHIVE_AFTER_SECONDS  # Default 3600
+   ```
+
+---
+
+## Related Documentation
+
+- [CONFIGURATION.md](CONFIGURATION.md) - All configuration options
+- [ARCHITECTURE.md](ARCHITECTURE.md) - System architecture overview
+- [REPL.md](REPL.md) - REPL server details
+- [PERFORMANCE.md](PERFORMANCE.md) - Performance tuning
