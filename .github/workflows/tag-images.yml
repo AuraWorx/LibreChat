@@ -8,29 +8,15 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      # `secrets` isn't a valid context inside step `if:` expressions —
-      # only env/github/inputs/job/matrix/needs/runner/steps/strategy/vars
-      # are. Mirror the two Docker Hub secrets into env vars here so the
-      # optional-login steps below can check them via `env.*` instead.
-      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
-      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     strategy:
-      fail-fast: false
       matrix:
         include:
           - target: api-build
-            context: .
             file: Dockerfile.multi
             image_name: librechat-api
           - target: node
-            context: .
             file: Dockerfile
             image_name: librechat
-          - target: app
-            context: code-interpreter
-            file: code-interpreter/Dockerfile
-            image_name: librechat-code-interpreter
 
     steps:
       # Check out the repository
@@ -45,25 +31,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # Docker registry names must be lowercase; github.repository_owner
-      # resolves to "AuraWorx" (capital A) and every push-triggered build
-      # of this workflow has failed on that alone — pre-existing bug, not
-      # specific to the code-interpreter image added here.
-      - name: Compute lowercase repository owner
-        id: repo-owner
-        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
-
       # Log in to GitHub Container Registry
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v2
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Login to Docker Hub (optional — skipped when secrets are absent)
+      # Login to Docker Hub
       - name: Login to Docker Hub
-        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -74,31 +51,16 @@ jobs:
         run: |
           cp .env.example .env
 
-      # Build and push Docker images for each target (GHCR only)
-      - name: Build and push Docker images (GHCR only)
-        if: ${{ env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' }}
+      # Build and push Docker images for each target
+      - name: Build and push Docker images
         uses: docker/build-push-action@v5
         with:
-          context: ${{ matrix.context }}
+          context: .
           file: ${{ matrix.file }}
           push: true
           tags: |
-            ghcr.io/${{ steps.repo-owner.outputs.owner }}/${{ matrix.image_name }}:${{ github.ref_name }}
-            ghcr.io/${{ steps.repo-owner.outputs.owner }}/${{ matrix.image_name }}:latest
-          platforms: linux/amd64,linux/arm64
-          target: ${{ matrix.target }}
-
-      # Build and push Docker images for each target (GHCR + Docker Hub)
-      - name: Build and push Docker images (GHCR + Docker Hub)
-        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' }}
-        uses: docker/build-push-action@v5
-        with:
-          context: ${{ matrix.context }}
-          file: ${{ matrix.file }}
-          push: true
-          tags: |
-            ghcr.io/${{ steps.repo-owner.outputs.owner }}/${{ matrix.image_name }}:${{ github.ref_name }}
-            ghcr.io/${{ steps.repo-owner.outputs.owner }}/${{ matrix.image_name }}:latest
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.image_name }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.image_name }}:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image_name }}:${{ github.ref_name }}
             ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image_name }}:latest
           platforms: linux/amd64,linux/arm64
