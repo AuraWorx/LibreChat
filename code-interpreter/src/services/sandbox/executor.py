@@ -87,24 +87,45 @@ class SandboxExecutor:
             nsjail_cmd = " ".join(
                 shlex.quote(str(a)) for a in [settings.nsjail_binary] + nsjail_args
             )
-            # BUG-003: Mask /proc, unconditionally, for every language.
-            # Previously java/rs/bash were exempted here — they need a
-            # working /proc (Java/Rust for /proc/self/exe, bash for tools
-            # like LibreOffice) — under a "trusted-tenant model" assumption
-            # that turned out to be wrong: a confirmed cross-tenant
-            # vulnerability read peer sandboxes' /proc/<pid>/{root,cwd,fd,
-            # environ,maps} and wrote peer memory via /proc/<pid>/mem through
-            # exactly this exemption. nsjail itself now mounts its own
-            # /proc, scoped to its own PID namespace (see NsjailConfig,
-            # `--mount none:/proc:proc:hidepid=2,subset=pid`), which gives
-            # every language a working /proc that shows only this sandbox's
-            # own process — so the exemption is no longer needed for
-            # functionality, and dropping it closes the actual hole.
-            # This outer bind-mount stays as a fail-safe belt-and-suspenders
-            # layer: if nsjail's own namespace-scoped mount were ever to not
-            # take effect, the process still sees this masked-empty /proc
-            # rather than the raw ambient one.
-            proc_mask = "mount --bind /var/lib/code-interpreter/empty_proc /proc && "
+            # BUG-003 / cross-tenant /proc fix: previously java/rs/bash were
+            # exempted from /proc masking here (they need a working /proc —
+            # Java/Rust for /proc/self/exe, bash for LibreOffice) under a
+            # "trusted-tenant model" assumption that turned out to be wrong:
+            # a confirmed cross-tenant vulnerability read peer sandboxes'
+            # /proc/<pid>/{root,cwd,fd,environ,maps} and wrote peer memory
+            # via /proc/<pid>/mem through exactly that exemption.
+            #
+            # The real fix is nsjail's own PID-namespace-scoped /proc mount
+            # (see NsjailConfig, `--mount none:/proc:proc:hidepid=2,subset=pid`),
+            # which needs clone_newns re-enabled. That surfaced a second,
+            # unrelated problem: Docker/ECS pre-masks several /proc subpaths
+            # (bind-mounts over /proc/kcore, /proc/keys, etc., plus read-only
+            # remounts of /proc/bus, /proc/fs, /proc/irq, /proc/sys,
+            # /proc/sysrq-trigger, /proc/acpi — the runc maskedPaths +
+            # readonlyPaths lists) for its OWN, unrelated hardening. nsjail's
+            # attempt to mount an entirely fresh procfs over a directory that
+            # already has these submounts fails with EPERM ("procfs mount may
+            # fail if /proc has overmounts") — confirmed by direct reproduction.
+            # Unmounting them first (in this sandbox's own disposable mount
+            # namespace only — no effect on the container's other processes)
+            # clears the way for nsjail's real mount to succeed.
+            #
+            # The OLD approach here — bind-mounting an empty directory over
+            # /proc before nsjail runs — is NOT kept as defense in depth: it's
+            # actively incompatible with clone_newuser. nsjail itself needs to
+            # write /proc/<child-pid>/{uid,gid}_map from the PARENT's own
+            # /proc during its internal user-namespace setup; masking /proc
+            # before nsjail even starts breaks that unrelated to the
+            # sandboxed process's own /proc view, and made every execution
+            # fail with "Couldn't initialize user namespace" — confirmed by
+            # direct reproduction. Do not reintroduce it.
+            proc_overmount_paths = (
+                "/proc/bus /proc/fs /proc/irq /proc/sys /proc/sysrq-trigger "
+                "/proc/acpi /proc/kcore /proc/keys /proc/latency_stats /proc/timer_list"
+            )
+            clear_proc_overmounts = (
+                f"for p in {proc_overmount_paths}; do umount -l \"$p\" 2>/dev/null; done && "
+            )
 
             tmpfs_size = settings.sandbox_tmpfs_size_mb
             noexec_tmpfs = "noexec,nosuid,nodev,"
@@ -123,8 +144,6 @@ class SandboxExecutor:
                 f"mount -t tmpfs -o size=1k tmpfs /app/ssl && "
                 f"mount -t tmpfs -o size=1k tmpfs /app/dashboard && "
                 f"mount -t tmpfs -o size=1k tmpfs /app/src && "
-                # BUG-003: Hide /proc (fail-safe layer — see comment above)
-                f"{proc_mask}"
                 # BUG-007: Ephemeral /tmp with noexec,nosuid,nodev
                 f"mount -t tmpfs -o {noexec_tmpfs}size={tmpfs_size}m,mode=1777 tmpfs /tmp && "
                 # BUG-008: Lock down other writable paths
@@ -136,6 +155,9 @@ class SandboxExecutor:
                 f"mount --bind {shlex.quote(deps_path)} {shlex.quote(deps_path)} && "
                 f"mount -o remount,bind,nosuid,nodev {shlex.quote(deps_path)} "
                 f"|| true) && "
+                # Clear Docker/ECS's pre-existing /proc submounts so nsjail's
+                # own scoped procfs mount can succeed (see comment above)
+                f"{clear_proc_overmounts}"
                 # Execute nsjail
                 f"{nsjail_cmd}"
             )

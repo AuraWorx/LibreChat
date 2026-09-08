@@ -464,15 +464,16 @@ class CodeExecutionRunner:
                 f"mount -t tmpfs -o size=1k tmpfs /app/ssl && "
                 f"mount -t tmpfs -o size=1k tmpfs /app/dashboard && "
                 f"mount -t tmpfs -o size=1k tmpfs /app/src && "
-                # This path previously masked /proc/self/mountinfo only,
-                # leaving the rest of /proc fully exposed (unlike the other
-                # two nsjail launch paths in executor.py/pool.py, which at
-                # least bind-mask it). nsjail itself now mounts its own
-                # namespace-scoped /proc regardless (see NsjailConfig), so
-                # this is fail-safe defense in depth, not the primary fix —
-                # kept for consistency with the other launch paths.
-                f"mount --bind /var/lib/code-interpreter/empty_proc /proc && "
                 f"mount --bind /dev/null /proc/self/mountinfo && "
+                # Clear Docker/ECS's pre-existing /proc submounts so nsjail's
+                # own PID-namespace-scoped procfs mount can succeed — see the
+                # full explanation in executor.py's execute_command. Do NOT
+                # add an empty_proc bind-mount mask here (or anywhere): it's
+                # incompatible with clone_newuser (breaks nsjail's own
+                # /proc/<child-pid>/{uid,gid}_map setup).
+                f"for p in /proc/bus /proc/fs /proc/irq /proc/sys /proc/sysrq-trigger "
+                f"/proc/acpi /proc/kcore /proc/keys /proc/latency_stats /proc/timer_list; "
+                f"do umount -l \"$p\" 2>/dev/null; done && "
                 f"{nsjail_cmd}"
             )
 
