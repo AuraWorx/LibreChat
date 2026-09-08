@@ -184,6 +184,61 @@ class TestNsjailConfigBuildArgs:
             idx = args.index("--mount")
             assert args[idx + 1] == "none:/proc:proc:hidepid=2,subset=pid"
 
+    def test_filesystem_binds_present_for_new_jail_root(self):
+        """With clone_newns back on, nsjail builds its own mount tree from
+        scratch instead of inheriting the parent's — every path the
+        sandboxed process needs must be explicitly bound. Confirmed by
+        direct testing in the actual deployment environment: without
+        these, chdir('/mnt/data') and then execve of the target binary
+        both fail. /bin, /lib, /sbin are usr-merge symlinks on this base
+        image, so their *resolved* real paths must be the bind source
+        (binding the symlink path itself doesn't work)."""
+        config = NsjailConfig()
+        args = config.build_args(
+            sandbox_dir="/tmp/sandbox/data",
+            command=["echo", "test"],
+            language="py",
+            outside_uid=TEST_OUTSIDE_UID,
+        )
+        assert "-R" in args
+        bind_pairs = [args[i + 1] for i, a in enumerate(args) if a == "-R"]
+        assert "/usr" in bind_pairs
+        assert "/usr/bin:/bin" in bind_pairs
+        assert "/usr/lib:/lib" in bind_pairs
+        assert "/usr/lib64:/lib64" in bind_pairs
+        assert "/usr/sbin:/sbin" in bind_pairs
+        assert "/opt" in bind_pairs
+        assert "-B" in args
+        assert args[args.index("-B") + 1] == "/mnt/data"
+
+    def test_language_specific_binds_wired_in(self):
+        """_LANGUAGE_BIND_MOUNTS must actually be used in build_args — it
+        was previously defined but never consumed while clone_newns was
+        disabled (inheriting the parent namespace made it redundant)."""
+        config = NsjailConfig()
+        args = config.build_args(
+            sandbox_dir="/tmp/sandbox/data",
+            command=["python3", "code.py"],
+            language="py",
+            outside_uid=TEST_OUTSIDE_UID,
+        )
+        bind_pairs = [args[i + 1] for i, a in enumerate(args) if a == "-R"]
+        for expected in config._LANGUAGE_BIND_MOUNTS["py"]:
+            assert expected in bind_pairs
+
+    def test_tmp_tmpfs_mount_present(self):
+        """nsjail's own mount namespace needs its own writable /tmp,
+        separate from the outer wrapper's /tmp tmpfs (BUG-007)."""
+        config = NsjailConfig()
+        args = config.build_args(
+            sandbox_dir="/tmp/sandbox/data",
+            command=["echo", "test"],
+            language="py",
+            outside_uid=TEST_OUTSIDE_UID,
+        )
+        mount_values = [args[i + 1] for i, a in enumerate(args) if a == "-m"]
+        assert any(v.startswith("none:/tmp:tmpfs:") for v in mount_values)
+
     def test_command_separator(self):
         """Test command separator '--' is present before the command."""
         config = NsjailConfig()

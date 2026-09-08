@@ -395,6 +395,20 @@ class SandboxPool:
             noexec_tmpfs = "noexec,nosuid,nodev,"
             deps_path = settings.skill_deps_path
 
+            # Clear Docker/ECS's pre-existing /proc submounts so nsjail's own
+            # PID-namespace-scoped procfs mount can succeed — see the full
+            # explanation in executor.py's execute_command. The previous
+            # empty_proc bind-mount masking approach is NOT kept as defense
+            # in depth: it's incompatible with clone_newuser (breaks nsjail's
+            # own /proc/<child-pid>/{uid,gid}_map setup) and must not return.
+            proc_overmount_paths = (
+                "/proc/bus /proc/fs /proc/irq /proc/sys /proc/sysrq-trigger "
+                "/proc/acpi /proc/kcore /proc/keys /proc/latency_stats /proc/timer_list"
+            )
+            clear_proc_overmounts = (
+                f"for p in {proc_overmount_paths}; do umount -l \"$p\" 2>/dev/null; done && "
+            )
+
             wrapper_cmd = (
                 # Bind sandbox dir to /mnt/data (before hiding sandboxes dir)
                 f"mount --bind {shlex.quote(str(sandbox_info.data_dir))} /mnt/data && "
@@ -408,8 +422,6 @@ class SandboxPool:
                 f"mount -t tmpfs -o size=1k tmpfs /app/ssl && "
                 f"mount -t tmpfs -o size=1k tmpfs /app/dashboard && "
                 f"mount -t tmpfs -o size=1k tmpfs /app/src && "
-                # BUG-003: Hide /proc (REPL is Python-only, always safe to mask)
-                f"mount --bind /var/lib/code-interpreter/empty_proc /proc && "
                 # BUG-007: Ephemeral /tmp with noexec,nosuid,nodev
                 f"mount -t tmpfs -o {noexec_tmpfs}size={tmpfs_size}m,mode=1777 tmpfs /tmp && "
                 # BUG-008: Lock down other writable paths
@@ -421,6 +433,7 @@ class SandboxPool:
                 f"mount --bind {shlex.quote(deps_path)} {shlex.quote(deps_path)} && "
                 f"mount -o remount,bind,nosuid,nodev {shlex.quote(deps_path)} "
                 f"|| true) && "
+                f"{clear_proc_overmounts}"
                 # Execute nsjail
                 f"{nsjail_cmd}"
             )

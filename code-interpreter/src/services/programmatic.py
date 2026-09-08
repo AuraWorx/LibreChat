@@ -191,6 +191,21 @@ class ProgrammaticService:
             noexec_tmpfs = "noexec,nosuid,nodev,"
             deps_path = settings.skill_deps_path
 
+            # Clear Docker/ECS's pre-existing /proc submounts so nsjail's own
+            # PID-namespace-scoped procfs mount can succeed. See the matching
+            # comment in executor.py's execute_command for the full story —
+            # short version: a bind-mount masking trick used to sit here
+            # instead, but it's incompatible with clone_newuser (nsjail needs
+            # /proc/<child-pid>/{uid,gid}_map from the *unmasked* parent /proc
+            # during its own internal setup) and must not come back.
+            proc_overmount_paths = (
+                "/proc/bus /proc/fs /proc/irq /proc/sys /proc/sysrq-trigger "
+                "/proc/acpi /proc/kcore /proc/keys /proc/latency_stats /proc/timer_list"
+            )
+            clear_proc_overmounts = (
+                f"for p in {proc_overmount_paths}; do umount -l \"$p\" 2>/dev/null; done && "
+            )
+
             wrapper_cmd = (
                 f"mount --bind {shlex.quote(str(sandbox_info.data_dir))} /mnt/data && "
                 f"mount -t tmpfs -o size=1k tmpfs /var/lib/code-interpreter/sandboxes && "
@@ -199,7 +214,6 @@ class ProgrammaticService:
                 f"mount -t tmpfs -o size=1k tmpfs /app/ssl && "
                 f"mount -t tmpfs -o size=1k tmpfs /app/dashboard && "
                 f"mount -t tmpfs -o size=1k tmpfs /app/src && "
-                f"mount --bind /var/lib/code-interpreter/empty_proc /proc && "
                 # BUG-007: Ephemeral /tmp with noexec,nosuid,nodev
                 f"mount -t tmpfs -o {noexec_tmpfs}size={tmpfs_size}m,mode=1777 tmpfs /tmp && "
                 # BUG-008: Lock down other writable paths
@@ -211,6 +225,7 @@ class ProgrammaticService:
                 f"mount --bind {shlex.quote(deps_path)} {shlex.quote(deps_path)} && "
                 f"mount -o remount,bind,nosuid,nodev {shlex.quote(deps_path)} "
                 f"|| true) && "
+                f"{clear_proc_overmounts}"
                 f"{nsjail_cmd}"
             )
 

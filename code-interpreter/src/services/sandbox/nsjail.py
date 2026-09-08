@@ -4,6 +4,7 @@ SandboxInfo is the handle for a running sandbox. NsjailConfig builds
 the CLI arguments for invoking nsjail.
 """
 
+import os
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -284,6 +285,54 @@ class NsjailConfig:
         # hidepid alone does nothing when sandboxes share a uid, which is why
         # --user/--group below also stopped doing that.
         args.extend(["--mount", "none:/proc:proc:hidepid=2,subset=pid"])
+
+        # Filesystem: with clone_newns back on, nsjail builds its OWN mount
+        # tree from scratch instead of just inheriting the parent's — every
+        # path the sandboxed process needs must be explicitly bound here now.
+        # Confirmed by direct testing: without these, even chdir('/mnt/data')
+        # fails, then execve of the target binary fails (ENOENT — indistinguishable
+        # from a missing binary, but actually a missing dynamic linker/lib).
+        #
+        # /bin, /lib, /sbin are usr-merge symlinks into /usr on this base image
+        # (bin -> usr/bin, etc.) — binding the symlink path itself doesn't work
+        # (nsjail creates a real directory at the mountpoint, which then shadows
+        # rather than follows the symlink target inside the jail). Bind the
+        # RESOLVED real path as the source instead: -R /usr/bin:/bin.
+        # /lib64 is the same story and easy to miss — leaving it out doesn't fail
+        # loudly, it just makes execve() of any dynamically-linked binary fail
+        # with ENOENT (the missing piece is /lib64/ld-linux-x86-64.so.2, the
+        # binary's own interpreter, not the binary itself).
+        args.extend(["-R", "/usr"])
+        args.extend(["-R", "/usr/bin:/bin"])
+        args.extend(["-R", "/usr/lib:/lib"])
+        args.extend(["-R", "/usr/lib64:/lib64"])
+        args.extend(["-R", "/usr/sbin:/sbin"])
+        # /opt holds repl_server.py/ptc_server.py/ptc_bash_server.py — baked
+        # into the image, needed by REPL and PTC modes.
+        args.extend(["-R", "/opt"])
+        # sandbox_dir is bind-mounted to /mnt/data by the *outer* unshare
+        # wrapper (executor/programmatic/pool/runner), but nsjail's own new
+        # mount namespace doesn't inherit that automatically anymore — needs
+        # its own explicit (read-write) bind of the same path.
+        args.extend(["-B", "/mnt/data"])
+        # SSL certs, alternatives, timezone data — best-effort: these paths
+        # aren't guaranteed to exist on every base image, and nsjail's CLI
+        # bind flags are mandatory (unlike the proto file's mandatory:false),
+        # so only add them if actually present to avoid a hard failure.
+        for optional_path in ("/etc/ssl", "/etc/alternatives", "/usr/share/zoneinfo"):
+            if os.path.exists(optional_path):
+                args.extend(["-R", optional_path])
+        # Per-language runtime paths (python/node/go/rust/php/etc.) — chosen
+        # by the language actually being invoked, so these should always
+        # exist for that language; no existence check needed the way the
+        # generic paths above do.
+        for lang_path in self._LANGUAGE_BIND_MOUNTS.get(normalized_lang, []):
+            args.extend(["-R", lang_path])
+        # Writable /tmp inside the jail — nsjail's own mount namespace needs
+        # its own, separate from the outer wrapper's /tmp tmpfs (BUG-007).
+        # Sized to match settings.sandbox_tmpfs_size_mb rather than nsjail's
+        # unsized --tmpfsmount default.
+        args.extend(["-m", f"none:/tmp:tmpfs:size={tmpfs_size_mb * 1024 * 1024}"])
 
         # Seccomp policy: block dangerous syscalls
         # - ptrace: prevents process inspection/debugging (BUG-006a). Note
