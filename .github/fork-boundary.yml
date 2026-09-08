@@ -65,6 +65,20 @@ aura_directories:
   - client/src/components/aura/
   - client/src/hooks/aura/
 
+  # code-interpreter/ is the vendored source of the (formerly third-party,
+  # unmodified) LibreCodeInterpreter sandbox service — the standalone
+  # EC2/ECS code-execution API librechat-suite-2's CDK deploys separately
+  # from LibreChat itself (LIBRECHAT_CODE_BASEURL). It was never forked
+  # before; a confirmed cross-tenant sandbox-isolation vulnerability
+  # (AuraWorx/LibreChat#14) is fixed here. Unlike the aura/ subdirectories
+  # above, which hold NEW code living alongside modified upstream files,
+  # this is an entire separate, self-contained project living in its own
+  # top-level directory — not upstream-owned code being touched, so it's
+  # a permanent allowlist entry, not a one-time exception like the blocks
+  # below.
+  # Tracks: AuraWorx/LibreChat#14
+  - code-interpreter/
+
   # --- One-time reconciliation exception, NOT an ongoing exemption ---
   # AuraWorx/LibreChat#9 (Azure AI Foundry custom-endpoint support) is built
   # on a branch descended from the shipped fork release-tag lineage, which
