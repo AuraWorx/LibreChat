@@ -211,20 +211,33 @@ class TestNsjailConfigBuildArgs:
         assert "-B" in args
         assert args[args.index("-B") + 1] == "/mnt/data"
 
-    def test_language_specific_binds_wired_in(self):
-        """_LANGUAGE_BIND_MOUNTS must actually be used in build_args — it
-        was previously defined but never consumed while clone_newns was
-        disabled (inheriting the parent namespace made it redundant)."""
+    def test_language_specific_paths_not_bound_separately(self):
+        """_LANGUAGE_BIND_MOUNTS entries must NOT be bound as their own
+        separate -R mounts: every one of them (python/node/go/rust/php/etc.)
+        is already a subpath of /usr or /opt, both bound whole. Binding a
+        subpath again on top of an already-mounted read-only parent fails
+        with "Permission denied" (createMountTarget can't create a new
+        mountpoint inside a mount that's already active and read-only) —
+        confirmed by direct reproduction against the real repl_server.py
+        launch path. This was a real regression caught during that
+        verification, not a hypothetical."""
         config = NsjailConfig()
-        args = config.build_args(
-            sandbox_dir="/tmp/sandbox/data",
-            command=["python3", "code.py"],
-            language="py",
-            outside_uid=TEST_OUTSIDE_UID,
-        )
-        bind_pairs = [args[i + 1] for i, a in enumerate(args) if a == "-R"]
-        for expected in config._LANGUAGE_BIND_MOUNTS["py"]:
-            assert expected in bind_pairs
+        for lang, paths in config._LANGUAGE_BIND_MOUNTS.items():
+            if not paths:
+                continue
+            args = config.build_args(
+                sandbox_dir="/tmp/sandbox/data",
+                command=["echo", "test"],
+                language=lang,
+                outside_uid=TEST_OUTSIDE_UID,
+            )
+            bind_pairs = [args[i + 1] for i, a in enumerate(args) if a == "-R"]
+            for lang_path in paths:
+                assert lang_path not in bind_pairs, (
+                    f"{lang_path!r} (language {lang!r}) must not be bound "
+                    "separately — it's already covered by the whole-tree "
+                    "/usr or /opt bind"
+                )
 
     def test_tmp_tmpfs_mount_present(self):
         """nsjail's own mount namespace needs its own writable /tmp,

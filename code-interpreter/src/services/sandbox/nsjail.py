@@ -315,19 +315,24 @@ class NsjailConfig:
         # mount namespace doesn't inherit that automatically anymore — needs
         # its own explicit (read-write) bind of the same path.
         args.extend(["-B", "/mnt/data"])
-        # SSL certs, alternatives, timezone data — best-effort: these paths
-        # aren't guaranteed to exist on every base image, and nsjail's CLI
-        # bind flags are mandatory (unlike the proto file's mandatory:false),
-        # so only add them if actually present to avoid a hard failure.
-        for optional_path in ("/etc/ssl", "/etc/alternatives", "/usr/share/zoneinfo"):
+        # SSL certs, alternatives — best-effort: these paths aren't
+        # guaranteed to exist on every base image, and nsjail's CLI bind
+        # flags are mandatory (unlike the proto file's mandatory:false), so
+        # only add them if actually present to avoid a hard failure. NOT
+        # under /usr, so no ordering conflict with the /usr bind above.
+        for optional_path in ("/etc/ssl", "/etc/alternatives"):
             if os.path.exists(optional_path):
                 args.extend(["-R", optional_path])
-        # Per-language runtime paths (python/node/go/rust/php/etc.) — chosen
-        # by the language actually being invoked, so these should always
-        # exist for that language; no existence check needed the way the
-        # generic paths above do.
-        for lang_path in self._LANGUAGE_BIND_MOUNTS.get(normalized_lang, []):
-            args.extend(["-R", lang_path])
+        # Per-language runtime paths (_LANGUAGE_BIND_MOUNTS) are NOT bound
+        # separately here — every single one of them (python/node/go/rust/
+        # php/etc., plus the timezone data originally considered above) is
+        # already a subpath of /usr or /opt, both already bound whole above.
+        # Binding a subpath again on top of an already-mounted read-only
+        # parent fails with "Permission denied" — createMountTarget() can't
+        # create a new mountpoint inside a mount that's already active and
+        # read-only — confirmed by direct reproduction against the actual
+        # repl_server.py launch path. The whole-tree /usr + /opt binds above
+        # already cover every one of these paths.
         # Writable /tmp inside the jail — nsjail's own mount namespace needs
         # its own, separate from the outer wrapper's /tmp tmpfs (BUG-007).
         # Sized to match settings.sandbox_tmpfs_size_mb rather than nsjail's
