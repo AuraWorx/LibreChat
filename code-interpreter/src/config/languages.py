@@ -1,0 +1,229 @@
+"""Unified language configuration - single source of truth.
+
+This module defines all supported programming languages and their
+execution settings (commands, resource multipliers, user IDs, etc.).
+"""
+
+import os
+from dataclasses import dataclass, field
+from typing import Dict, Optional
+
+
+@dataclass(frozen=True)
+class LanguageConfig:
+    """Complete configuration for a programming language.
+
+    This is the single source of truth for all language-specific settings.
+    """
+
+    code: str  # Short code: "py", "js", "go", etc.
+    name: str  # Full name: "Python", "JavaScript", etc.
+    user_id: int  # Sandbox user ID
+    file_extension: str  # File extension without dot: "py", "js", etc.
+    execution_command: str  # Command to execute code
+    uses_stdin: bool = False  # Whether code is passed via stdin
+    timeout_multiplier: float = 1.0  # Multiplier for base timeout
+    memory_multiplier: float = 1.0  # Multiplier for base memory limit
+    environment: Dict[str, str] = field(default_factory=dict)
+
+
+def _get_sandbox_user_id(default: int = 1001) -> int:
+    """Read the shared sandbox UID override from the environment."""
+    raw_value = os.getenv("SANDBOX_UID")
+    if raw_value in (None, ""):
+        return default
+    assert raw_value is not None
+
+    try:
+        user_id = int(raw_value)
+    except ValueError as exc:
+        raise ValueError(f"SANDBOX_UID must be an integer, got: {raw_value}") from exc
+
+    if user_id < 0:
+        raise ValueError(f"SANDBOX_UID must be >= 0, got: {user_id}")
+
+    return user_id
+
+
+SANDBOX_USER_ID = _get_sandbox_user_id()
+
+
+# All 13 supported languages with complete configuration
+LANGUAGES: Dict[str, LanguageConfig] = {
+    "py": LanguageConfig(
+        code="py",
+        name="Python",
+        user_id=SANDBOX_USER_ID,
+        file_extension="py",
+        execution_command="python3 -",
+        uses_stdin=True,
+        timeout_multiplier=1.0,
+        memory_multiplier=1.0,
+    ),
+    "js": LanguageConfig(
+        code="js",
+        name="JavaScript",
+        user_id=SANDBOX_USER_ID,
+        file_extension="js",
+        execution_command="node",
+        uses_stdin=True,
+        timeout_multiplier=1.0,
+        memory_multiplier=1.0,
+    ),
+    "ts": LanguageConfig(
+        code="ts",
+        name="TypeScript",
+        user_id=SANDBOX_USER_ID,
+        file_extension="ts",
+        execution_command="tsc code.ts --outDir . --module commonjs "
+        "--target ES2019 && node code.js",
+        uses_stdin=False,
+        timeout_multiplier=1.2,
+        memory_multiplier=1.0,
+    ),
+    "go": LanguageConfig(
+        code="go",
+        name="Go",
+        user_id=SANDBOX_USER_ID,
+        file_extension="go",
+        execution_command="go build -o code code.go && ./code",
+        uses_stdin=False,
+        timeout_multiplier=1.5,
+        memory_multiplier=1.2,
+    ),
+    "java": LanguageConfig(
+        code="java",
+        name="Java",
+        user_id=SANDBOX_USER_ID,
+        file_extension="java",
+        execution_command="javac Code.java && java Code",
+        uses_stdin=False,
+        timeout_multiplier=2.0,
+        memory_multiplier=1.5,
+    ),
+    "c": LanguageConfig(
+        code="c",
+        name="C",
+        user_id=SANDBOX_USER_ID,
+        file_extension="c",
+        execution_command="gcc -o code code.c && ./code",
+        uses_stdin=False,
+        timeout_multiplier=1.5,
+        memory_multiplier=1.0,
+    ),
+    "cpp": LanguageConfig(
+        code="cpp",
+        name="C++",
+        user_id=SANDBOX_USER_ID,
+        file_extension="cpp",
+        execution_command="g++ -o code code.cpp && ./code",
+        uses_stdin=False,
+        timeout_multiplier=1.5,
+        memory_multiplier=1.0,
+    ),
+    "php": LanguageConfig(
+        code="php",
+        name="PHP",
+        user_id=SANDBOX_USER_ID,
+        file_extension="php",
+        execution_command="php",
+        uses_stdin=True,
+        timeout_multiplier=1.0,
+        memory_multiplier=1.0,
+    ),
+    "rs": LanguageConfig(
+        code="rs",
+        name="Rust",
+        user_id=SANDBOX_USER_ID,
+        file_extension="rs",
+        execution_command="rustc code.rs -o code && ./code",
+        uses_stdin=False,
+        timeout_multiplier=3.0,
+        memory_multiplier=1.5,
+    ),
+    "r": LanguageConfig(
+        code="r",
+        name="R",
+        user_id=SANDBOX_USER_ID,
+        file_extension="r",
+        execution_command="Rscript code.r",
+        uses_stdin=False,
+        timeout_multiplier=1.5,
+        memory_multiplier=1.2,
+    ),
+    "f90": LanguageConfig(
+        code="f90",
+        name="Fortran",
+        user_id=SANDBOX_USER_ID,
+        file_extension="f90",
+        execution_command="gfortran -o code code.f90 && ./code",
+        uses_stdin=False,
+        timeout_multiplier=2.0,
+        memory_multiplier=1.0,
+    ),
+    "d": LanguageConfig(
+        code="d",
+        name="D",
+        user_id=SANDBOX_USER_ID,
+        file_extension="d",
+        execution_command="ldc2 code.d -of=code && ./code",
+        uses_stdin=False,
+        timeout_multiplier=2.0,
+        memory_multiplier=1.2,
+    ),
+    "bash": LanguageConfig(
+        code="bash",
+        name="Bash",
+        user_id=SANDBOX_USER_ID,
+        file_extension="sh",
+        execution_command="bash",
+        uses_stdin=True,
+        timeout_multiplier=1.0,
+        memory_multiplier=1.0,
+    ),
+}
+
+
+def get_language(code: str) -> Optional[LanguageConfig]:
+    """Get language configuration by code."""
+    return LANGUAGES.get(code.lower())
+
+
+def get_supported_languages() -> list[str]:
+    """Get list of supported language codes."""
+    return list(LANGUAGES.keys())
+
+
+def is_supported_language(code: str) -> bool:
+    """Check if a language code is supported."""
+    return code.lower() in LANGUAGES
+
+
+def get_user_id_for_language(code: str) -> int:
+    """Get sandbox user ID for a language."""
+    lang = get_language(code)
+    if lang:
+        return lang.user_id
+    raise ValueError(f"Unsupported language: {code}")
+
+
+def get_execution_command(code: str) -> str:
+    """Get execution command for a language."""
+    lang = get_language(code)
+    if lang:
+        return lang.execution_command
+    raise ValueError(f"Unsupported language: {code}")
+
+
+def uses_stdin(code: str) -> bool:
+    """Check if a language uses stdin for code input."""
+    lang = get_language(code)
+    return lang.uses_stdin if lang else False
+
+
+def get_file_extension(code: str) -> str:
+    """Get file extension for a language."""
+    lang = get_language(code)
+    if lang:
+        return lang.file_extension
+    raise ValueError(f"Unsupported language: {code}")

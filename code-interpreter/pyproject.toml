@@ -1,0 +1,9 @@
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+markers = [
+    "client_replay: runtime-faithful client replay coverage against a live API",
+    "live_api: tests that exercise a running API over real HTTP",
+    "slow: heavier scenarios suitable for dedicated CI jobs",
+    "contract_only: in-process contract and wiring checks, not end-to-end coverage",
+]

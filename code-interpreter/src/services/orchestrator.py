@@ -1,0 +1,990 @@
+"""Execution Orchestrator - Coordinates code execution workflow.
+
+This module provides a clean abstraction over the execution workflow,
+coordinating between session, file, and execution services.
+
+The orchestrator can be used by API endpoints to delegate the complex
+workflow logic, resulting in thinner endpoints.
+
+Usage:
+    orchestrator = ExecutionOrchestrator(
+        session_service=session_service,
+        file_service=file_service,
+        execution_service=execution_service
+    )
+    response = await orchestrator.execute(request)
+"""
+
+import asyncio
+import math
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+import structlog
+
+from ..config import settings
+from ..config.languages import is_supported_language
+from ..core.events import event_bus, ExecutionCompleted
+from ..models.metrics import DetailedExecutionMetrics
+from ..models import (
+    ExecRequest,
+    ExecResponse,
+    FileRef,
+    SessionCreate,
+    ExecuteCodeRequest,
+    ValidationError,
+    ServiceUnavailableError,
+)
+from ..models.errors import ErrorDetail
+from .interfaces import (
+    SessionServiceInterface,
+    ExecutionServiceInterface,
+    FileServiceInterface,
+)
+from .execution.output import OutputProcessor
+from .state import StateService
+from .state_archival import StateArchivalService
+
+logger = structlog.get_logger(__name__)
+
+
+@dataclass
+class ExecutionContext:
+    """Context object passed through the execution pipeline."""
+
+    request: ExecRequest
+    request_id: str
+    session_id: Optional[str] = None
+    mounted_files: Optional[List[Dict[str, Any]]] = None
+    # Snapshot of (mtime_ns, size) per mounted-file basename, captured AFTER mount
+    # but BEFORE user code runs. Used by _handle_generated_files to detect
+    # in-place edits — files whose stats changed get surfaced as new generated
+    # FileRefs in the current session, so LibreChat tracks the new version on
+    # the next call. Empty when no files were mounted.
+    mounted_file_stats: Optional[Dict[str, tuple]] = None
+    execution: Optional[Any] = None
+    generated_files: Optional[List[FileRef]] = None
+    stdout: str = ""
+    stderr: str = ""
+    container: Optional[Any] = (
+        None  # Container used for execution (avoids session lookup)
+    )
+    # State persistence fields
+    initial_state: Optional[str] = None
+    new_state: Optional[str] = None
+    state_errors: Optional[List[str]] = None
+    # Metrics tracking fields
+    api_key_hash: Optional[str] = None
+    is_env_key: bool = False
+    container_source: str = "pool_hit"  # pool_hit, pool_miss, pool_disabled
+    execution_start_time: Optional[datetime] = None
+
+
+class ExecutionOrchestrator:
+    """Coordinates the code execution workflow.
+
+    This orchestrator follows a pipeline pattern:
+    1. Validate request
+    2. Get or create session
+    3. Mount files
+    4. Execute code
+    5. Handle generated files
+    6. Build response
+    7. Cleanup
+    """
+
+    def __init__(
+        self,
+        session_service: SessionServiceInterface,
+        file_service: FileServiceInterface,
+        execution_service: ExecutionServiceInterface,
+        state_service: Optional[StateService] = None,
+        state_archival_service: Optional[StateArchivalService] = None,
+    ):
+        self.session_service = session_service
+        self.file_service = file_service
+        self.execution_service = execution_service
+        self.state_service = state_service or StateService()
+        self.state_archival_service = state_archival_service
+
+    async def execute(
+        self,
+        request: ExecRequest,
+        request_id: str = "",
+        api_key_hash: Optional[str] = None,
+        is_env_key: bool = False,
+    ) -> ExecResponse:
+        """Execute code and return LibreChat-compatible response.
+
+        Args:
+            request: The execution request
+            request_id: Optional request ID for logging
+            api_key_hash: Hash of the API key for metrics tracking
+            is_env_key: True if using env var API key (no rate limiting)
+
+        Returns:
+            ExecResponse: LibreChat-compatible response with session_id, files, stdout, stderr
+        """
+        ctx = ExecutionContext(
+            request=request,
+            request_id=request_id,
+            api_key_hash=api_key_hash,
+            is_env_key=is_env_key,
+            execution_start_time=datetime.now(),
+        )
+
+        try:
+            # Step 1: Validate request
+            self._validate_request(ctx)
+
+            # Step 2: Get or create session
+            ctx.session_id = await self._get_or_create_session(ctx)
+
+            # Step 2.5: Load previous state (Python only)
+            await self._load_state(ctx)
+
+            # Step 3: Mount files
+            ctx.mounted_files = await self._mount_files(ctx)
+
+            # Step 4: Execute code (with state)
+            ctx.execution = await self._execute_code(ctx)
+
+            # Step 5: Extract outputs (before state save)
+            self._extract_outputs(ctx)
+
+            # Step 5.5: Save new state (Python only, before file handling)
+            await self._save_state(ctx)
+
+            # Step 6: Handle generated files. Includes in-place edits to mounted
+            # files now — runner._detect_generated_files compares pre-execution
+            # mtime/size against current state and surfaces edited files. Each
+            # such file becomes a new file_id owned by ctx.session_id, so
+            # LibreChat's next call references the updated content.
+            ctx.generated_files = await self._handle_generated_files(ctx)
+
+            # Step 7: Build response
+            response = self._build_response(ctx)
+
+            # Step 8: Cleanup
+            await self._cleanup(ctx)
+
+            return response
+
+        except (
+            ValidationError,
+            ServiceUnavailableError,
+        ):
+            raise
+        except ValueError as e:
+            logger.error("Invalid execution request", error=str(e))
+            raise ValidationError(message=str(e))
+        except Exception as e:
+            logger.error("Code execution failed", error=str(e))
+            raise ServiceUnavailableError(
+                service="Code Execution",
+                message=f"Unexpected error during code execution: {str(e)}",
+            )
+
+    def _validate_request(self, ctx: ExecutionContext) -> None:
+        """Validate the execution request."""
+        request = ctx.request
+
+        # Validate language
+        if not is_supported_language(request.lang):
+            logger.error("Unsupported language", language=request.lang)
+            raise ValidationError(
+                message=f"Unsupported programming language: {request.lang}",
+                details=[
+                    ErrorDetail(
+                        field="lang",
+                        message=f"Language '{request.lang}' is not supported",
+                        code="unsupported_language",
+                    )
+                ],
+            )
+
+        # Validate code content
+        if not request.code or not request.code.strip():
+            logger.error("Empty code provided")
+            raise ValidationError(
+                message="Code cannot be empty",
+                details=[
+                    ErrorDetail(
+                        field="code",
+                        message="Code field is required and cannot be empty",
+                        code="empty_code",
+                    )
+                ],
+            )
+
+    async def _get_or_create_session(self, ctx: ExecutionContext) -> str:
+        """Get existing session or create new one.
+
+        Session lookup priority:
+        1. Use session_id from request (for explicit session continuity/state persistence)
+        2. Reuse session from file references, but ONLY if the session belongs to
+           the same user (prevents cross-user session sharing via shared agent files)
+        3. Reuse session by entity_id (for session continuity within same entity)
+        4. Create new session
+
+        SECURITY: File references carry a session_id that indicates where the file
+        is stored, NOT which session to execute in. When multiple users share an
+        agent with attached files, they all reference the same upload session.
+        Blindly reusing that session would leak state between users. We only reuse
+        a file-referenced session if its user_id matches the current request.
+        """
+        request = ctx.request
+
+        # Priority 1: Use explicit session_id from request (for state persistence)
+        if request.session_id:
+            try:
+                existing = await self.session_service.get_session(request.session_id)
+                if existing and existing.status.value == "active":
+                    logger.debug(
+                        "Reusing session from request",
+                        session_id=request.session_id[:12],
+                    )
+                    return request.session_id
+            except Exception as e:
+                logger.warning(
+                    "Error looking up session from request",
+                    session_id=request.session_id[:12],
+                    error=str(e),
+                )
+
+        # Priority 2: Try to reuse session from files array, but only if the
+        # session was created by the same user. This enables same-user session
+        # continuity (ToolNode injects files from previous execution) while
+        # preventing cross-user sharing (agent files reference a shared upload
+        # session that has no user_id).
+        if request.files and request.user_id:
+            for file_ref in request.files:
+                if file_ref.session_id:
+                    try:
+                        existing = await self.session_service.get_session(
+                            file_ref.session_id
+                        )
+                        if existing and existing.status.value == "active":
+                            session_user = (
+                                existing.metadata.get("user_id")
+                                if existing.metadata
+                                else None
+                            )
+                            if session_user and session_user == request.user_id:
+                                logger.debug(
+                                    "Reusing session from file reference (same user)",
+                                    session_id=file_ref.session_id[:12],
+                                )
+                                return file_ref.session_id
+                    except Exception as e:
+                        logger.warning(
+                            "Error looking up session",
+                            session_id=file_ref.session_id,
+                            error=str(e),
+                        )
+
+        # Priority 3: Try to reuse session by entity_id.
+        # Only use explicit entity_id — do NOT fall back to user_id.
+        # LibreChat manages session continuity via file references (priority 2),
+        # not entity_id. Using user_id here would incorrectly share sessions
+        # across different conversations of the same user.
+        if request.entity_id:
+            try:
+                entity_sessions = await self.session_service.list_sessions_by_entity(
+                    request.entity_id, limit=1
+                )
+                if entity_sessions:
+                    existing = entity_sessions[0]
+                    if existing.status.value == "active":
+                        logger.debug(
+                            "Reusing session by entity_id",
+                            session_id=existing.session_id[:12],
+                            entity_id=request.entity_id,
+                        )
+                        return existing.session_id
+            except Exception as e:
+                logger.warning(
+                    "Error looking up session by entity_id",
+                    entity_id=request.entity_id,
+                    error=str(e),
+                )
+
+        # Create new session
+        metadata = {}
+        if request.entity_id:
+            metadata["entity_id"] = request.entity_id
+        if request.user_id:
+            metadata["user_id"] = request.user_id
+
+        session = await self.session_service.create_session(
+            SessionCreate(metadata=metadata)
+        )
+        logger.info("Created new session", session_id=session.session_id)
+        return session.session_id
+
+    async def _mount_files(self, ctx: ExecutionContext) -> List[Dict[str, Any]]:
+        """Mount files for code execution.
+
+        Behavior:
+        1. Mount explicit file references from request.files[]
+        2. Also auto-mount files already tracked in the current session
+        3. Deduplicate by mounted filename with precedence:
+           explicit refs > native current-session files > linked-input aliases
+        """
+        explicit_files = []
+        if ctx.request.files:
+            explicit_files = await self._mount_explicit_files(ctx)
+
+        session_files = []
+        if ctx.session_id:
+            session_files = await self._auto_mount_session_files(ctx)
+
+        native_session_files = [
+            file_info
+            for file_info in session_files
+            if not file_info.get("is_linked_input")
+        ]
+        linked_session_files = [
+            file_info for file_info in session_files if file_info.get("is_linked_input")
+        ]
+
+        return self._merge_mounted_files(
+            explicit_files,
+            native_session_files,
+            linked_session_files,
+        )
+
+    def _mount_dedupe_key(self, file_info: Dict[str, Any]) -> str:
+        """Return the normalized filename key used for mount precedence."""
+        return OutputProcessor.sanitize_filename(file_info.get("filename", ""))
+
+    def _merge_mounted_files(
+        self, *groups: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Merge mounted file groups using filename-based precedence."""
+        merged: List[Dict[str, Any]] = []
+        mounted_names = set()
+
+        for group in groups:
+            for file_info in group:
+                dedupe_key = self._mount_dedupe_key(file_info)
+                if not dedupe_key or dedupe_key in mounted_names:
+                    continue
+
+                merged.append(file_info)
+                mounted_names.add(dedupe_key)
+
+        return merged
+
+    async def _mount_explicit_files(
+        self, ctx: ExecutionContext
+    ) -> List[Dict[str, Any]]:
+        """Mount explicitly requested files from request.files[]."""
+        mounted = []
+        mounted_ids = set()
+
+        for file_ref in ctx.request.files:
+            # Get file info
+            file_info = await self.file_service.get_file_info(
+                file_ref.session_id, file_ref.id
+            )
+
+            # Fallback: lookup by name
+            if not file_info and file_ref.name:
+                session_files = await self.file_service.list_files(file_ref.session_id)
+                for f in session_files:
+                    if f.filename == file_ref.name:
+                        file_info = f
+                        break
+
+            if not file_info:
+                logger.warning(
+                    "File not found", file_id=file_ref.id, name=file_ref.name
+                )
+                continue
+
+            # Skip duplicates
+            key = (file_ref.session_id, file_info.file_id)
+            if key in mounted_ids:
+                continue
+
+            if ctx.session_id and file_ref.session_id != ctx.session_id:
+                await self.file_service.link_file_into_session(
+                    ctx.session_id,
+                    file_ref.session_id,
+                    file_info.file_id,
+                )
+
+            file_metadata = await self.file_service.get_file_metadata(
+                file_ref.session_id, file_info.file_id
+            )
+            is_read_only = (
+                file_metadata.get("is_read_only") == "1" if file_metadata else False
+            )
+
+            mounted.append(
+                {
+                    "file_id": file_info.file_id,
+                    "filename": file_info.filename,
+                    "path": file_info.path,
+                    "size": file_info.size,
+                    "session_id": file_ref.session_id,
+                    "is_linked_input": False,
+                    "entity_id": getattr(file_ref, "entity_id", None),
+                    "is_read_only": is_read_only,
+                }
+            )
+            mounted_ids.add(key)
+
+        return mounted
+
+    async def _auto_mount_session_files(
+        self, ctx: ExecutionContext
+    ) -> List[Dict[str, Any]]:
+        """Auto-mount all files from the current session.
+
+        This enables cross-message file persistence by automatically mounting
+        all files (uploaded + generated) when a session_id is provided but
+        no explicit files are requested.
+
+        SECURITY: All files are from the current session, so cross-session
+        isolation is maintained.
+        """
+        logger.debug(
+            "Auto-mounting all session files",
+            session_id=ctx.session_id[:12] if ctx.session_id else None,
+        )
+
+        mounted = []
+        mounted_ids = set()
+
+        session_files = await self.file_service.list_files(ctx.session_id)
+
+        for file_info in session_files:
+            file_metadata = await self.file_service.get_file_metadata(
+                ctx.session_id, file_info.file_id
+            )
+            is_linked_input = (
+                file_metadata.get("type") == "linked_input" if file_metadata else False
+            )
+            is_read_only = (
+                file_metadata.get("is_read_only") == "1" if file_metadata else False
+            )
+
+            # Skip duplicates (shouldn't happen, but defensive)
+            key = (ctx.session_id, file_info.file_id)
+            if key in mounted_ids:
+                continue
+
+            mounted.append(
+                {
+                    "file_id": file_info.file_id,
+                    "filename": file_info.filename,
+                    "path": file_info.path,
+                    "size": file_info.size,
+                    "session_id": ctx.session_id,
+                    "is_linked_input": is_linked_input,
+                    "is_read_only": is_read_only,
+                }
+            )
+            mounted_ids.add(key)
+
+        if mounted:
+            logger.debug(
+                "Auto-mounted session files",
+                session_id=ctx.session_id[:12] if ctx.session_id else None,
+                file_count=len(mounted),
+                files=[f["filename"] for f in mounted],
+            )
+
+        return mounted
+
+    async def _load_state(self, ctx: ExecutionContext) -> None:
+        """Load previous state from Redis (or S3 fallback) for Python sessions.
+
+        Priority order:
+        1. Redis hot storage (within 2-hour TTL)
+        2. S3 cold storage (archived state)
+        """
+        if not settings.state_persistence_enabled:
+            return
+
+        if ctx.request.lang != "py":
+            return
+
+        # Skip if state was already loaded by another mechanism
+        if ctx.initial_state:
+            logger.debug(
+                "State already loaded",
+                session_id=ctx.session_id[:12],
+            )
+            return
+
+        try:
+            # Try Redis (hot storage)
+            ctx.initial_state = await self.state_service.get_state(ctx.session_id)
+            if ctx.initial_state:
+                logger.debug(
+                    "Loaded state from Redis",
+                    session_id=ctx.session_id[:12],
+                    state_size=len(ctx.initial_state),
+                )
+                return
+
+            # Try S3 fallback (cold storage)
+            if self.state_archival_service and settings.state_archive_enabled:
+                ctx.initial_state = await self.state_archival_service.restore_state(
+                    ctx.session_id
+                )
+                if ctx.initial_state:
+                    logger.debug(
+                        "Restored state from S3",
+                        session_id=ctx.session_id[:12],
+                        state_size=len(ctx.initial_state),
+                    )
+
+        except Exception as e:
+            logger.warning(
+                "Failed to load state", session_id=ctx.session_id[:12], error=str(e)
+            )
+
+    async def _save_state(self, ctx: ExecutionContext) -> None:
+        """Save execution state to Redis for Python sessions."""
+        if not settings.state_persistence_enabled:
+            return
+
+        if ctx.request.lang != "py":
+            return
+
+        # Only save state if execution succeeded (unless configured otherwise)
+        if ctx.execution and hasattr(ctx.execution, "status"):
+            if ctx.execution.status.value not in ("completed", "success"):
+                if not settings.state_capture_on_error:
+                    logger.debug(
+                        "Skipping state save for failed execution",
+                        session_id=ctx.session_id[:12],
+                    )
+                    return
+
+        if ctx.new_state:
+            try:
+                import base64
+
+                raw_size = len(base64.b64decode(ctx.new_state))
+                max_redis_bytes = settings.state_max_redis_size_mb * 1024 * 1024
+
+                if raw_size > max_redis_bytes:
+                    # Large state: store blob in S3, pointer in Redis
+                    logger.info(
+                        "State exceeds Redis threshold, storing in S3",
+                        session_id=ctx.session_id[:12],
+                        state_size_mb=round(raw_size / 1024 / 1024, 1),
+                        threshold_mb=settings.state_max_redis_size_mb,
+                    )
+                    archived = False
+                    if self.state_archival_service:
+                        archived = await self.state_archival_service.archive_state(
+                            ctx.session_id, ctx.new_state
+                        )
+                    if archived:
+                        await self.state_service.save_state_pointer(
+                            ctx.session_id,
+                            ctx.new_state,
+                            ttl_seconds=settings.state_ttl_seconds,
+                        )
+                    else:
+                        # S3 archival failed, fall back to Redis anyway
+                        logger.warning(
+                            "S3 archival failed, falling back to Redis",
+                            session_id=ctx.session_id[:12],
+                        )
+                        await self.state_service.save_state(
+                            ctx.session_id,
+                            ctx.new_state,
+                            ttl_seconds=settings.state_ttl_seconds,
+                        )
+                else:
+                    # Normal path: store in Redis
+                    await self.state_service.save_state(
+                        ctx.session_id,
+                        ctx.new_state,
+                        ttl_seconds=settings.state_ttl_seconds,
+                    )
+
+            except Exception as e:
+                logger.warning(
+                    "Failed to save state", session_id=ctx.session_id[:12], error=str(e)
+                )
+
+        # Log any state serialization warnings
+        if ctx.state_errors:
+            for error in ctx.state_errors[:5]:  # Limit to 5
+                logger.debug(
+                    "State serialization warning",
+                    session_id=ctx.session_id[:12],
+                    warning=error,
+                )
+
+    # NOTE: `_update_mounted_files_content` was removed in favor of letting
+    # `_handle_generated_files` handle in-place edits. The old in-place-update
+    # path silently dropped edits in three common scenarios (cross-session
+    # mounted files, agent-uploaded files, read-only linked aliases), and
+    # because the response carried no signal that an edit had occurred,
+    # LibreChat had no way to track the new content for the next call. The
+    # new model: if user code modifies a mounted file, the runner detects
+    # the mtime/size change and surfaces it as a regular generated file in
+    # the current session. Each iteration produces a fresh file_id which
+    # LibreChat then references on the next call. See `runner.py:
+    # _detect_generated_files` and `SandboxInfo.mounted_file_stats`.
+
+    def _normalize_args(self, args: Any) -> Optional[List[str]]:
+        """Normalize args parameter to List[str] or None.
+
+        Args:
+            args: Can be None, a string, a list of strings, or other JSON types
+
+        Returns:
+            List of string arguments, or None if no valid args
+        """
+        if args is None:
+            return None
+        if isinstance(args, str):
+            # Single string argument
+            return [args] if args.strip() else None
+        if isinstance(args, list):
+            # Convert all elements to strings, filter out empty
+            result = [str(arg) for arg in args if arg is not None and str(arg).strip()]
+            return result if result else None
+        # Other types (dict, int, etc.) - convert to string
+        return [str(args)]
+
+    async def _execute_code(self, ctx: ExecutionContext) -> Any:
+        """Execute the code with optional state persistence."""
+        # Normalize args from request
+        normalized_args = self._normalize_args(ctx.request.args)
+
+        # Convert per-request timeout (ms) to seconds, clamped to server max.
+        timeout_seconds = (
+            math.ceil(ctx.request.timeout / 1000)
+            if ctx.request.timeout
+            else settings.max_execution_time
+        )
+        timeout_seconds = min(timeout_seconds, settings.max_execution_time)
+
+        exec_request = ExecuteCodeRequest(
+            code=ctx.request.code,
+            language=ctx.request.lang,
+            timeout=timeout_seconds,
+            args=normalized_args,
+        )
+
+        # Determine if we should use state persistence (Python only)
+        use_state = settings.state_persistence_enabled and ctx.request.lang == "py"
+
+        # execute_code returns tuple:
+        # (execution, container, new_state, state_errors, container_source)
+        (
+            execution,
+            ctx.container,
+            ctx.new_state,
+            ctx.state_errors,
+            ctx.container_source,
+        ) = await self.execution_service.execute_code(
+            ctx.session_id,
+            exec_request,
+            ctx.mounted_files,
+            initial_state=ctx.initial_state if use_state else None,
+            capture_state=use_state,
+        )
+
+        logger.debug(
+            "Code execution completed in sandbox",
+            session_id=ctx.session_id,
+            status=execution.status.value,
+            container_id=(
+                ctx.container.id[:12]
+                if ctx.container and hasattr(ctx.container, "id")
+                else None
+            ),
+            has_state=ctx.new_state is not None,
+        )
+
+        return execution
+
+    async def _handle_generated_files(self, ctx: ExecutionContext) -> List[FileRef]:
+        """Handle files generated during execution.
+
+        Preserves any subdirectory structure under `/mnt/data/` so files
+        like `/mnt/data/charts/foo.png` come back as `name="charts/foo.png"`
+        in the response. LibreChat (PR #12848) preserves these paths in its
+        own rendering — collapsing them here would break that.
+        """
+        generated = []
+
+        for output in ctx.execution.outputs:
+            if output.type.value != "file":
+                continue
+
+            file_path = output.content
+            relative = (
+                file_path[len("/mnt/data/") :]
+                if file_path.startswith("/mnt/data/")
+                else file_path
+            )
+
+            # Skip hidden files (any segment starting with `.`). Done on the
+            # raw path because sanitize_filename rewrites `.foo` to `_.foo`,
+            # which would defeat the check.
+            raw_segments = [s for s in relative.replace("\\", "/").split("/") if s]
+            if not raw_segments or any(s.startswith(".") for s in raw_segments):
+                continue
+
+            filename = OutputProcessor.sanitize_relative_path(relative)
+            if not filename or filename == "_":
+                continue
+
+            meta = output.metadata or {}
+
+            # Inherited files: untouched mounted files. Skip download and emit
+            # the original FileRef so clients can split "Generated" from
+            # "Available" in LLM prompts and avoid re-uploading.
+            if meta.get("inherited"):
+                generated.append(
+                    FileRef(
+                        id=meta["original_file_id"],
+                        name=filename,
+                        session_id=meta.get("original_session_id"),
+                        inherited=True,
+                        entity_id=meta.get("original_entity_id"),
+                    )
+                )
+                logger.debug(
+                    "Inherited file passed through",
+                    session_id=ctx.session_id,
+                    filename=filename,
+                    original_file_id=meta.get("original_file_id"),
+                )
+                continue
+
+            try:
+                # Get file content from container (use ctx.container directly, no session lookup)
+                file_content = await self._get_file_from_container(
+                    ctx.container, file_path
+                )
+
+                file_id = await self.file_service.store_execution_output_file(
+                    ctx.session_id,
+                    filename,
+                    file_content,
+                )
+
+                file_ref = FileRef(
+                    id=file_id,
+                    name=filename,
+                    session_id=ctx.session_id,  # Include for cross-message persistence
+                )
+                if meta.get("modified_from_id"):
+                    file_ref.modified_from = {
+                        "id": meta["modified_from_id"],
+                        "storage_session_id": meta.get("modified_from_session_id")
+                        or "",
+                    }
+                generated.append(file_ref)
+                logger.debug(
+                    "Generated file stored",
+                    session_id=ctx.session_id,
+                    filename=filename,
+                    file_id=file_id,
+                )
+
+            except Exception as e:
+                logger.error(
+                    "Failed to store generated file", filename=filename, error=str(e)
+                )
+
+        return generated
+
+    async def _get_file_from_container(self, container: Any, file_path: str) -> bytes:
+        """Get file content from the execution sandbox.
+
+        Args:
+            container: Sandbox object (passed directly, no session lookup needed)
+            file_path: Path to file inside sandbox
+        """
+        if not container:
+            return f"# Sandbox not found for file: {file_path}\n".encode("utf-8")
+
+        sandbox_manager = self.execution_service.sandbox_manager
+        content = sandbox_manager.get_file_content_from_sandbox(container, file_path)
+        if content is not None:
+            return content
+        return f"# Failed to retrieve file: {file_path}\n".encode("utf-8")
+
+    def _extract_outputs(self, ctx: ExecutionContext) -> None:
+        """Extract stdout and stderr from execution outputs."""
+        stdout_parts = []
+        stderr_parts = []
+
+        for output in ctx.execution.outputs:
+            if output.type.value == "stdout":
+                stdout_parts.append(output.content)
+            elif output.type.value == "stderr":
+                stderr_parts.append(output.content)
+
+        ctx.stdout = "\n".join(stdout_parts)
+        ctx.stderr = "\n".join(stderr_parts)
+
+        # Include error message in stderr if execution failed
+        if (
+            ctx.execution.status.value == "failed"
+            and ctx.execution.error_message
+            and not ctx.stderr
+        ):
+            ctx.stderr = ctx.execution.error_message
+
+        # Ensure stdout ends with newline (LibreChat compatibility)
+        if ctx.stdout and not ctx.stdout.endswith("\n"):
+            ctx.stdout += "\n"
+
+    def _build_response(self, ctx: ExecutionContext) -> ExecResponse:
+        """Build the LibreChat-compatible response."""
+        return ExecResponse(
+            session_id=ctx.session_id,
+            files=ctx.generated_files or [],
+            stdout=ctx.stdout,
+            stderr=ctx.stderr,
+        )
+
+    async def _cleanup(self, ctx: ExecutionContext) -> None:
+        """Cleanup resources after execution.
+
+        - Destroys the container in background (non-blocking for faster response)
+        - Publishes ExecutionCompleted event for metrics
+        """
+        # Destroy sandbox in background for faster response.
+        # Use sandbox_pool.destroy_sandbox() which kills the REPL process
+        # AND removes the directory. Without this, REPL processes leak.
+        if ctx.container:
+            try:
+                sandbox_id = (
+                    ctx.container.id[:12] if hasattr(ctx.container, "id") else "unknown"
+                )
+                logger.debug("Scheduling sandbox destruction", sandbox_id=sandbox_id)
+
+                # Use pool destroy (kills process + removes dir) or manager (dir only)
+                sandbox_pool = getattr(self.execution_service, "sandbox_pool", None)
+                sandbox_manager = self.execution_service.sandbox_manager
+
+                async def destroy_background():
+                    try:
+                        if sandbox_pool:
+                            await sandbox_pool.destroy_sandbox(ctx.container)
+                        else:
+                            sandbox_manager.destroy_sandbox(ctx.container)
+                        logger.debug("Sandbox destroyed", sandbox_id=sandbox_id)
+                    except Exception as e:
+                        logger.warning(
+                            "Background sandbox destruction failed",
+                            sandbox_id=sandbox_id,
+                            error=str(e),
+                        )
+
+                asyncio.create_task(destroy_background())
+            except Exception as e:
+                logger.error("Failed to schedule sandbox destruction", error=str(e))
+        else:
+            logger.debug("No sandbox in context to destroy")
+
+        # Publish event for metrics
+        try:
+            execution_time_ms = None
+            success = True
+            status = "completed"
+
+            if ctx.execution:
+                execution_time_ms = getattr(ctx.execution, "execution_time_ms", None)
+                if hasattr(ctx.execution, "status"):
+                    status = ctx.execution.status.value
+                    success = status in ("completed", "success")
+
+            await event_bus.publish(
+                ExecutionCompleted(
+                    execution_id=(
+                        ctx.execution.execution_id if ctx.execution else ctx.request_id
+                    ),
+                    session_id=ctx.session_id,
+                    success=success,
+                    execution_time_ms=execution_time_ms,
+                )
+            )
+
+            # Record detailed metrics
+            if settings.detailed_metrics_enabled:
+                await self._record_detailed_metrics(ctx, execution_time_ms, status)
+
+        except Exception as e:
+            logger.warning(
+                "Failed to publish execution completed event",
+                session_id=ctx.session_id,
+                error=str(e),
+            )
+
+    async def _record_detailed_metrics(
+        self, ctx: ExecutionContext, execution_time_ms: Optional[float], status: str
+    ) -> None:
+        """Record detailed execution metrics for analytics.
+
+        Args:
+            ctx: Execution context
+            execution_time_ms: Execution time in milliseconds
+            status: Execution status (completed, failed, timeout)
+        """
+        try:
+            from .metrics import metrics_service
+
+            # Get memory usage if available
+            memory_peak_mb = None
+            if ctx.execution and hasattr(ctx.execution, "memory_peak_mb"):
+                memory_peak_mb = ctx.execution.memory_peak_mb
+
+            # Count files
+            files_uploaded = len(ctx.mounted_files) if ctx.mounted_files else 0
+            files_generated = len(ctx.generated_files) if ctx.generated_files else 0
+
+            # Get output size
+            output_size = len(ctx.stdout.encode()) + len(ctx.stderr.encode())
+
+            # Get state size if available
+            state_size = len(ctx.new_state.encode()) if ctx.new_state else None
+
+            # Check if REPL mode was used
+            repl_mode = (
+                ctx.request.lang == "py"
+                and settings.repl_enabled
+                and settings.sandbox_pool_enabled
+            )
+
+            metrics = DetailedExecutionMetrics(
+                execution_id=(
+                    ctx.execution.execution_id if ctx.execution else ctx.request_id
+                ),
+                session_id=ctx.session_id or "",
+                api_key_hash=ctx.api_key_hash[:16] if ctx.api_key_hash else "unknown",
+                user_id=ctx.request.user_id,
+                entity_id=ctx.request.entity_id,
+                language=ctx.request.lang,
+                status=status,
+                execution_time_ms=execution_time_ms or 0,
+                memory_peak_mb=memory_peak_mb,
+                container_source=ctx.container_source,
+                repl_mode=repl_mode,
+                files_uploaded=files_uploaded,
+                files_generated=files_generated,
+                output_size_bytes=output_size,
+                state_size_bytes=state_size,
+            )
+
+            await metrics_service.record_execution(metrics)
+
+        except Exception as e:
+            logger.warning("Failed to record detailed metrics", error=str(e))
